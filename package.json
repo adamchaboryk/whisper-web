@@ -12,17 +12,18 @@
     "preview": "vite preview"
   },
   "dependencies": {
+    "@floating-ui/react": "^0.27.20",
     "@headlessui/react": "^2.2.9",
     "@huggingface/transformers": "3.8.1",
     "axios": "^1.14.0",
     "i18next": "^26.0.2",
+    "parakeet.wgsl": "^1.0.1",
     "react": "^19.2.4",
     "react-dom": "^19.2.4",
     "react-i18next": "^17.0.1"
   },
   "devDependencies": {
     "@eslint/js": "^9",
-    "@iconify-json/circle-flags": "^1.2.10",
     "@svgr/core": "^8.1.0",
     "@svgr/plugin-jsx": "^8.1.0",
     "@tailwindcss/vite": "^4.2.2",
@@ -41,5 +42,11 @@
     "typescript-eslint": "^8.57.2",
     "unplugin-icons": "^23.0.1",
     "vite": "^8.0.3"
+  },
+  "allowScripts": {
+    "onnxruntime-node@1.21.0": true,
+    "fsevents@2.3.3": true,
+    "sharp@0.34.5": true,
+    "protobufjs@7.6.5": true
   }
 }

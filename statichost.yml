@@ -1,5 +1,0 @@
-domains:
-  # Primary domain
-  - whisper-web.mesu.re
-  # Domains that redirect to the primary
-  - www.whisper-web.mesu.re

@@ -1,62 +1,146 @@
-import { t } from "i18next";
-import { AudioManager } from "./components/AudioManager";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { ApplicationControls, AudioManager } from "./components/AudioManager";
 import Transcript from "./components/Transcript";
-import { useTranscriber } from "./hooks/useTranscriber";
-import { Trans, useTranslation } from "react-i18next";
-import LanguageSelector from "./components/LanguageSelector";
+import { TranscriberData, useTranscriber } from "./hooks/useTranscriber";
 
 function App() {
-    const transcriber = useTranscriber();
+  const transcriber = useTranscriber();
+  const mediaSeekRef = useRef<((time: number) => void) | undefined>(undefined);
+  const [savedTranscript, setSavedTranscript] = useState<{
+    source: TranscriberData;
+    chunks: TranscriberData["chunks"];
+  }>();
+  const [draftTranscript, setDraftTranscript] = useState<{
+    source: TranscriberData;
+    chunks: TranscriberData["chunks"];
+  }>();
+  const [isDark, setIsDark] = useState(() => {
+    const storedTheme = window.localStorage.getItem("whisper-web-theme");
+    return storedTheme ? storedTheme === "dark" : window.matchMedia("(prefers-color-scheme: dark)").matches;
+  });
 
-    const { i18n } = useTranslation();
+  useEffect(() => {
+    document.documentElement.classList.toggle("dark", isDark);
+    document.documentElement.style.colorScheme = isDark ? "dark" : "light";
+    window.localStorage.setItem("whisper-web-theme", isDark ? "dark" : "light");
+  }, [isDark]);
 
-    const handleChangeLanguage = (newLanguage: string) => {
-        i18n.changeLanguage(newLanguage);
-    };
+  const savedChunks =
+    savedTranscript && savedTranscript.source === transcriber.output
+      ? savedTranscript.chunks
+      : transcriber.output?.chunks;
+  const draftChunks =
+    draftTranscript && draftTranscript.source === transcriber.output
+      ? draftTranscript.chunks
+      : undefined;
+  const previewChunks = draftChunks ?? savedChunks;
 
-    return (
-        <>
-            <div className='flex flex-col justify-center items-center min-h-screen py-4'>
-                <div className='container flex flex-col justify-center items-center'>
-                    <h1 className='text-5xl font-extrabold tracking-tight text-slate-900 sm:text-7xl text-center'>
-                        {t("app.title")}
-                    </h1>
-                    <h2 className='mt-3 mb-5 px-4 text-center text-1xl font-semibold tracking-tight text-slate-900 sm:text-2xl'>
-                        {t("app.subtitle")}
-                    </h2>
-                    <AudioManager transcriber={transcriber} />
-                    <Transcript transcribedData={transcriber.output} />
-                </div>
+  const startEditing = () => {
+    const output = transcriber.output;
+    if (!output || output.isBusy) {
+      return;
+    }
 
-                <footer className='text-center m-4'>
-                    <b>{t("app.footer")}</b>
-                    <br />
-                    <Trans
-                        i18nKey='app.footer_credits'
-                        components={{
-                            authorLink: (
-                                <a
-                                    className='underline'
-                                    href='https://github.com/PierreMesure/whisper-web'
-                                />
-                            ),
-                            demoLink: (
-                                <a
-                                    className='underline'
-                                    href='https://github.com/Xenova/whisper-web'
-                                />
-                            ),
-                        }}
-                    />
-                </footer>
-            </div>
-            <LanguageSelector
-                className='fixed bottom-4 right-16'
-                currentLanguage={i18n.language}
-                onChangeLanguage={handleChangeLanguage}
-            />
-        </>
-    );
+    setDraftTranscript({ source: output, chunks: savedChunks ?? output.chunks });
+  };
+
+  const handleChunkTextChange = (index: number, text: string) => {
+    const output = transcriber.output;
+    if (!output || output.isBusy) {
+      return;
+    }
+
+    setDraftTranscript((current) => {
+      const chunks = current?.source === output ? current.chunks : output.chunks;
+      return {
+        source: output,
+        chunks: chunks.map((chunk, chunkIndex) =>
+          chunkIndex === index ? { ...chunk, text } : chunk,
+        ),
+      };
+    });
+  };
+
+  const saveEdits = () => {
+    if (draftTranscript?.source === transcriber.output) {
+      setSavedTranscript(draftTranscript);
+    }
+    setDraftTranscript(undefined);
+  };
+
+  const cancelEdits = () => {
+    setDraftTranscript(undefined);
+  };
+
+  const handleSeekReady = useCallback((seekTo: (time: number) => void) => {
+    mediaSeekRef.current = seekTo;
+  }, []);
+
+  const handleSeekTo = useCallback((time: number) => {
+    mediaSeekRef.current?.(time);
+  }, []);
+
+  const handleGenerateSummary = () => {
+    const text = savedChunks
+      ?.map((chunk) => chunk.text)
+      .join(" ")
+      .trim();
+
+    if (text) {
+      transcriber.summarize(text);
+    }
+  };
+
+  return (
+    <div className='app-layout'>
+      <main className='app-main'>
+        <div className='container flex flex-col justify-center items-center'>
+          <h1 className='text-5xl font-extrabold tracking-tight text-slate-900 dark:text-slate-100 sm:text-7xl text-center'>
+            Transcribe
+          </h1>
+          <h2 className='mt-3 mb-5 px-4 text-center text-1xl font-semibold tracking-tight text-slate-900 dark:text-slate-300 sm:text-2xl'>
+            Transcribe speech directly in your browser.
+          </h2>
+          <AudioManager
+            transcriber={transcriber}
+            onGenerateSummary={handleGenerateSummary}
+            transcriptChunks={previewChunks}
+            onSeekReady={handleSeekReady}
+          />
+          <Transcript
+            transcribedData={transcriber.output}
+            chunks={previewChunks}
+            onChunkTextChange={handleChunkTextChange}
+            onSeekTo={handleSeekTo}
+            isEditing={Boolean(draftChunks)}
+            onStartEditing={startEditing}
+            onSaveEdits={saveEdits}
+            onCancelEdits={cancelEdits}
+            summary={transcriber.summary}
+            onGenerateSummary={handleGenerateSummary}
+            supportsSummarizer={transcriber.supportsSummarizer}
+          />
+        </div>
+      </main>
+      <aside>
+        <ApplicationControls
+          isDark={isDark}
+          onThemeToggle={() => setIsDark((current) => !current)}
+          transcriber={transcriber}
+        />
+      </aside>
+      <footer>
+        <p className="mt-5">
+          <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor" className="inline-block h-[1em] w-[1em] align-[-0.15em] mr-1.5" viewBox="0 0 16 16">
+            <path d="M8 0a4 4 0 0 1 4 4v2.05a2.5 2.5 0 0 1 2 2.45v5a2.5 2.5 0 0 1-2.5 2.5h-7A2.5 2.5 0 0 1 2 13.5v-5a2.5 2.5 0 0 1 2-2.45V4a4 4 0 0 1 4-4m0 1a3 3 0 0 0-3 3v2h6V4a3 3 0 0 0-3-3" />
+          </svg>
+          <strong>Transcription happens locally on your device, ensuring your audio and data stay private.</strong>
+        </p>
+        <p>Transcription speed depends on your device's processing power. Explore different models in settings.</p>
+        <p>This website works best in Google Chrome or Microsoft Edge.</p>
+      </footer>
+    </div>
+  );
 }
 
 export default App;

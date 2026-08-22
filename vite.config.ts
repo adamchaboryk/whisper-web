@@ -4,6 +4,9 @@ import tailwindcss from "@tailwindcss/vite";
 import Icons from "unplugin-icons/vite";
 
 export default defineConfig({
+  experimental: {
+    bundledDev: false,
+  },
   plugins: [
     react(),
     tailwindcss(),
