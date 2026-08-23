@@ -115,6 +115,7 @@ summary:focus-visible {
   padding: 1rem 0;
 }
 
+
 .app-container {
   display: flex;
   width: 41rem;
@@ -149,7 +150,7 @@ summary:focus-visible {
   display: inline-flex;
   align-items: center;
   gap: 0.375rem;
-  font-size: 0.875rem;
+  font-size: 1rem;
   color: #004c9b;
   text-decoration: underline;
   text-decoration-thickness: 1px;
@@ -168,9 +169,10 @@ summary:focus-visible {
 
 
 footer {
-  margin: 2rem 2rem 4rem 2rem;
   color: var(--text-muted);
   text-align: center;
+  width: 80ch;
+  margin: 3rem auto;
 }
 
 .source-panel {
