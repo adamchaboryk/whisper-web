@@ -12,6 +12,20 @@
   <link rel="icon" type="image/png" sizes="16x16" href="/favicon-16x16.png">
   <link rel="manifest" href="/site.webmanifest">
   <meta name="theme-color" content="#ffffff">
+  <script>
+    (function () {
+      const storedTheme = localStorage.getItem("whisper-web-theme");
+      const isDark = storedTheme ? storedTheme === "dark" : window.matchMedia("(prefers-color-scheme: dark)").matches;
+      if (isDark) {
+        document.documentElement.classList.add("dark");
+        document.documentElement.style.colorScheme = "dark";
+        document.documentElement.style.backgroundColor = "#0f172a";
+      } else {
+        document.documentElement.style.colorScheme = "light";
+        document.documentElement.style.backgroundColor = "#ffffff";
+      }
+    })();
+  </script>
 </head>
 
 <body>
