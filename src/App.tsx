@@ -96,10 +96,12 @@ function App() {
       <main className='app-main'>
         <div className='container flex flex-col justify-center items-center'>
           <h1 className='text-5xl font-extrabold tracking-tight text-slate-900 dark:text-slate-100 sm:text-7xl text-center'>
-            Transcribe
+            Transcribe audio
           </h1>
           <h2 className='mt-3 mb-5 px-4 text-center text-1xl font-semibold tracking-tight text-slate-900 dark:text-slate-300 sm:text-2xl'>
-            Transcribe speech directly in your browser.
+            <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor" className="inline-block h-[1em] w-[1em] align-[-0.15em] mr-1.5" viewBox="0 0 16 16">
+              <path d="M8 0a4 4 0 0 1 4 4v2.05a2.5 2.5 0 0 1 2 2.45v5a2.5 2.5 0 0 1-2.5 2.5h-7A2.5 2.5 0 0 1 2 13.5v-5a2.5 2.5 0 0 1 2-2.45V4a4 4 0 0 1 4-4m0 1a3 3 0 0 0-3 3v2h6V4a3 3 0 0 0-3-3" />
+            </svg> Directly in your browser. Locally on your device.
           </h2>
           <AudioManager
             transcriber={transcriber}
@@ -130,12 +132,6 @@ function App() {
         />
       </aside>
       <footer>
-        <p className="mt-5">
-          <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor" className="inline-block h-[1em] w-[1em] align-[-0.15em] mr-1.5" viewBox="0 0 16 16">
-            <path d="M8 0a4 4 0 0 1 4 4v2.05a2.5 2.5 0 0 1 2 2.45v5a2.5 2.5 0 0 1-2.5 2.5h-7A2.5 2.5 0 0 1 2 13.5v-5a2.5 2.5 0 0 1 2-2.45V4a4 4 0 0 1 4-4m0 1a3 3 0 0 0-3 3v2h6V4a3 3 0 0 0-3-3" />
-          </svg>
-          <strong>Transcription happens locally on your device, ensuring your audio and data stay private.</strong>
-        </p>
         <p>Transcription speed depends on your device's processing power. Explore different models in settings.</p>
         <p>This website works best in Google Chrome or Microsoft Edge.</p>
       </footer>

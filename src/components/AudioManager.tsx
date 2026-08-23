@@ -254,6 +254,11 @@ export function AudioManager(props: {
     [downloadAudioFromUrl, props.transcriber],
   );
 
+  const sampleAudioUrl = new URL(
+    "test.wav",
+    `${window.location.origin}${import.meta.env.BASE_URL}`,
+  ).toString();
+
   return (
     <>
       <div id='upload-toolbar' className='flex flex-col justify-center items-center rounded-lg bg-white dark:bg-slate-800 shadow-xl shadow-black/5'>
@@ -301,7 +306,7 @@ export function AudioManager(props: {
       <button
         type='button'
         className='demo'
-        onClick={() => handleUrlUpdate(Constants.getDefaultAudioUrl("en"))}
+        onClick={() => handleUrlUpdate(sampleAudioUrl)}
       >
         <SpeakerWaveIcon className='w-4 h-4' />
         Try sample audio

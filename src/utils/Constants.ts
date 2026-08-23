@@ -128,9 +128,8 @@ export const LANGUAGES = {
 };
 
 export const MODELS: { [key: string]: [string, string] } = {
-  "parakeet.wgsl": ["NVIDIA Parakeet (Fast & Accurate) (Recommended)", "en"],
+  "parakeet.wgsl": ["NVIDIA Parakeet (Fast & Accurate)", "en"],
   "onnx-community/distil-small.en": ["OpenAI Whisper (Fast & Accurate)", "en"],
-
   "onnx-community/whisper-tiny": ["Tiny (Fastest)", ""],
   "onnx-community/whisper-base": ["Base (Fast) (Recommended)", ""],
   "onnx-community/whisper-small": ["Small (Balanced)", ""],
@@ -151,14 +150,6 @@ export enum AudioSource {
 
 const isMobileOrTablet = mobileTabletCheck();
 
-function getDefaultAudioUrl(language: string): string {
-  switch (language) {
-    default:
-      return `https://huggingface.co/datasets/Xenova/transformers.js-docs/resolve/main/${isMobileOrTablet ? "jfk" : "ted_60_16k"
-        }.wav`;
-  }
-}
-
 function getDefaultModel(language: string): string {
   if (language === "en") {
     return "parakeet.wgsl";
@@ -172,7 +163,6 @@ function getDefaultLanguage(language: string): string {
 
 export default {
   SAMPLING_RATE: 16000,
-  getDefaultAudioUrl,
   getDefaultModel,
   DEFAULT_SUBTASK: "transcribe",
   getDefaultLanguage,
