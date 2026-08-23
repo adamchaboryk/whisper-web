@@ -63,6 +63,7 @@ export interface TranscriberData {
   tps?: number;
   progress?: number;
   estimatedRemainingSeconds?: number;
+  transcriptionSeconds?: number;
   text: string;
   chunks: { text: string; timestamp: [number, number | null] }[];
 }
@@ -230,6 +231,10 @@ export function useTranscriber(): Transcriber {
   const [isModelLoading, setIsModelLoading] = useState(false);
   const [summary, setSummary] = useState<SummaryData | undefined>(undefined);
   const jobStartRef = useRef<number | null>(null);
+  // Tracks when actual transcription work begins, separate from model load time.
+  const transcriptionStartRef = useRef<number | null>(null);
+  const isModelLoadingRef = useRef(false);
+  const awaitingModelLoadRef = useRef(false);
   const supportsSummarizer =
     typeof window !== "undefined" &&
     "Summarizer" in window;
@@ -288,6 +293,10 @@ export function useTranscriber(): Transcriber {
           progress > 0 && elapsedSeconds > 0 && duration > 0
             ? (elapsedSeconds * (100 - progress)) / progress
             : undefined;
+        const transcriptionSeconds =
+          !busy && transcriptionStartRef.current
+            ? (performance.now() - transcriptionStartRef.current) / 1000
+            : undefined;
 
         setTranscript({
           isBusy: busy,
@@ -295,6 +304,7 @@ export function useTranscriber(): Transcriber {
           tps: updateMessage.data.tps,
           progress,
           estimatedRemainingSeconds,
+          transcriptionSeconds,
           chunks: updateMessage.data.chunks ?? [],
         });
         setIsBusy(busy);
@@ -303,10 +313,17 @@ export function useTranscriber(): Transcriber {
       case "initiate":
         // Model file start load: add a new progress item to the list.
         setIsModelLoading(true);
+        isModelLoadingRef.current = true;
         setProgressItems((prev) => [...prev, message]);
         break;
       case "ready":
         setIsModelLoading(false);
+        isModelLoadingRef.current = false;
+        // Model finished loading while we were waiting: transcription starts now.
+        if (awaitingModelLoadRef.current) {
+          transcriptionStartRef.current = performance.now();
+          awaitingModelLoadRef.current = false;
+        }
         break;
       case "error":
         setIsBusy(false);
@@ -418,6 +435,15 @@ export function useTranscriber(): Transcriber {
           chunks: [],
         });
         jobStartRef.current = performance.now();
+        // If the model is already loaded, transcription starts immediately;
+        // otherwise wait for the "ready" event so load time isn't counted.
+        if (isModelLoadingRef.current) {
+          awaitingModelLoadRef.current = true;
+          transcriptionStartRef.current = null;
+        } else {
+          awaitingModelLoadRef.current = false;
+          transcriptionStartRef.current = performance.now();
+        }
 
         let audio;
         if (audioData.numberOfChannels === 2) {

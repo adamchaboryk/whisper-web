@@ -29,6 +29,16 @@ interface Props {
   supportsSummarizer?: boolean;
 }
 
+function formatTranscriptionDuration(seconds: number): string {
+  if (seconds < 60) {
+    return `${seconds.toFixed(0)} seconds`;
+  }
+
+  const minutes = Math.floor(seconds / 60);
+  const remainingSeconds = seconds - minutes * 60;
+  return `${minutes} minute${minutes === 1 ? "" : "s"} ${remainingSeconds.toFixed(0)} seconds`;
+}
+
 function ClipboardIcon(props: { className?: string }) {
   return (
     <svg
@@ -312,6 +322,12 @@ export default function Transcript({
       setLastAnnouncedProgress(milestoneProgress);
     }
   }, [transcribedData?.isBusy, transcribedData?.progress, lastAnnouncedProgress]);
+
+  useEffect(() => {
+    if (transcribedData?.transcriptionSeconds !== undefined) {
+      console.warn(`Transcribed in ${formatTranscriptionDuration(transcribedData.transcriptionSeconds)}.`);
+    }
+  }, [transcribedData?.transcriptionSeconds]);
 
   return (
     <div

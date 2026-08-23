@@ -129,11 +129,12 @@ export const LANGUAGES = {
 
 export const MODELS: { [key: string]: [string, string] } = {
   "parakeet.wgsl": ["NVIDIA Parakeet (Fast & Accurate)", "en"],
-  "onnx-community/distil-small.en": ["OpenAI Whisper (Fast & Accurate)", "en"],
-  "onnx-community/whisper-tiny": ["Tiny (Fastest)", ""],
-  "onnx-community/whisper-base": ["Base (Fast) (Recommended)", ""],
-  "onnx-community/whisper-small": ["Small (Balanced)", ""],
-  "onnx-community/whisper-large-v3-turbo": ["Large (Slower, but Best Quality)", ""],
+  // Parakeet is better. Tiny is redundant.
+  // "onnx-community/distil-small.en": ["OpenAI Whisper (Fast & Accurate)", "en"],
+  // "onnx-community/whisper-tiny": ["Tiny (Fastest)", ""],
+  "onnx-community/whisper-base": ["Whisper Base (Fast & Light)", ""],
+  "onnx-community/whisper-small": ["Whisper Small (Balanced)", ""],
+  "onnx-community/whisper-large-v3-turbo": ["Whisper Large (Slower, but Best Quality)", ""],
 };
 
 export const DTYPES: Record<string, string> = {
@@ -154,7 +155,7 @@ function getDefaultModel(language: string): string {
   if (language === "en") {
     return "parakeet.wgsl";
   }
-  return `onnx-community/whisper-${isMobileOrTablet ? "tiny" : "base"}`;
+  return `onnx-community/whisper-${isMobileOrTablet ? "base" : "small"}`;
 }
 
 function getDefaultLanguage(language: string): string {
