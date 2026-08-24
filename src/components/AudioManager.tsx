@@ -923,7 +923,7 @@ function Tile(props: {
           ? 'upload-button'
           : 'flex items-center justify-center rounded-lg p-2 bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 hover:text-white hover:bg-blue-600 transition-all duration-200'}
     >
-      <div className='w-7 h-7'>{props.icon}</div>
+      <div className='w-7 h-7 tile-button__icon'>{props.icon}</div>
       {props.text && (
         <div className={props.isApplicationControl ? 'control-button__label' : 'ml-2 break-text text-center text-md mw-30'}>
           {props.text}

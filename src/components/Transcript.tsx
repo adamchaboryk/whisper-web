@@ -497,7 +497,7 @@ export default function Transcript({
         </>
       )}
 
-      {transcribedData?.isBusy && transcribedData?.tps && (
+      {/*transcribedData?.isBusy && transcribedData?.tps && (
         <div className='status-row'>
           <span className='status-pill status-pill--metric'>
             <svg
@@ -511,7 +511,7 @@ export default function Transcript({
             {transcribedData.tps.toFixed(2)} tokens/second
           </span>
         </div>
-      )}
+      )*/}
       <div ref={endOfMessagesRef} />
     </div>
   );
