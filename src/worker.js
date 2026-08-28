@@ -3,6 +3,10 @@ import { createTranscriber } from "parakeet.wgsl";
 
 let parakeetTranscriber = null;
 
+const isMobile =
+  typeof navigator !== "undefined" &&
+  /Mobi|Android|iPhone|iPad/i.test(navigator.userAgent);
+
 const createCanonicalWav = (audio, sampleRate = 16000) => {
   const bytesPerSample = 2;
   const dataLength = audio.length * bytesPerSample;
@@ -279,7 +283,7 @@ self.addEventListener("message", async (event) => {
 
   try {
     const isParakeet = message.model === "parakeet.wgsl";
-    const CHUNK_DURATION_S = isParakeet ? 2 * 60 : 10 * 60; // 2m for parakeet, 10m for others
+    const CHUNK_DURATION_S = isParakeet ? (isMobile ? 30 : 2 * 60) : 10 * 60; // 30s mobile parakeet, 2m desktop, 10m others
     const SAMPLE_RATE = 16000;
     const SAMPLES_PER_CHUNK = CHUNK_DURATION_S * SAMPLE_RATE;
 
@@ -337,7 +341,25 @@ self.addEventListener("message", async (event) => {
         }
       };
 
-      const chunkResult = await transcribe(chunkMessage);
+      let chunkResult = await transcribe(chunkMessage).catch(error => {
+        // On mobile, WebGPU device-lost errors are common due to GPU memory pressure.
+        // Fall back to Whisper base (WASM) for the current chunk rather than aborting.
+        if (isParakeet && /device.*lost|gpu.*lost|out.*memory/i.test(error?.message ?? String(error))) {
+          console.warn("[whisper-web] WebGPU device lost during parakeet transcription, falling back to Whisper base for this chunk");
+          // Dispose the broken transcriber so it's recreated fresh if needed later
+          if (parakeetTranscriber) {
+            try { parakeetTranscriber.dispose(); } catch { /* already dead */ }
+            parakeetTranscriber = null;
+          }
+          return transcribe({
+            ...chunkMessage,
+            model: "onnx-community/whisper-base",
+            dtype: "q8",
+            gpu: false,
+          });
+        }
+        throw error;
+      });
 
       if (!chunkResult) {
         self.postMessage = originalPostMessage;
@@ -357,7 +379,14 @@ self.addEventListener("message", async (event) => {
       globalTps = chunkResult.tps; // keep last chunk's TPS
 
       if (offset + SAMPLES_PER_CHUNK < fullAudio.length) {
-        await new Promise(resolve => setTimeout(resolve, 500)); // allow GPU to breathe and GC
+        // On mobile, dispose the transcriber between chunks to fully release GPU
+        // memory (model weights, pipelines, buffers). The model reloads from
+        // Cache Storage in a few seconds — no network fetch needed.
+        if (isMobile && isParakeet && parakeetTranscriber) {
+          parakeetTranscriber.dispose();
+          parakeetTranscriber = null;
+        }
+        await new Promise(resolve => setTimeout(resolve, isMobile ? 1000 : 500));
       }
     }
 
