@@ -27,17 +27,22 @@ export default function Modal({
     onClose();
     try {
       if (typeof caches !== 'undefined') {
-        await caches.delete('transformers-cache');
+        const cacheNames = await caches.keys();
+        for (const cacheName of cacheNames) {
+          if (cacheName === 'transformers-cache' || cacheName.startsWith('parakeet.wgsl:models:')) {
+            try {
+              const cache = await caches.open(cacheName);
+              const requests = await cache.keys();
+              await Promise.all(requests.map(req => cache.delete(req)));
+            } catch (e) {
+              console.warn("Failed to clear individual entries for", cacheName, e);
+            }
+            await caches.delete(cacheName);
+          }
+        }
       }
     } catch (e) {
-      console.warn("Failed to delete transformers cache", e);
-    }
-
-    try {
-      const { deleteCachedModels } = await import('parakeet.wgsl');
-      await deleteCachedModels();
-    } catch (e) {
-      console.warn("Failed to delete parakeet caches", e);
+      console.warn("Failed to delete caches", e);
     }
 
     try {
