@@ -3,10 +3,6 @@ import { createTranscriber } from "parakeet.wgsl";
 
 let parakeetTranscriber = null;
 
-const isMobile =
-  typeof navigator !== "undefined" &&
-  /Mobi|Android|iPhone|iPad/i.test(navigator.userAgent);
-
 const createCanonicalWav = (audio, sampleRate = 16000) => {
   const bytesPerSample = 2;
   const dataLength = audio.length * bytesPerSample;
@@ -283,9 +279,13 @@ self.addEventListener("message", async (event) => {
 
   try {
     const isParakeet = message.model === "parakeet.wgsl";
-    const CHUNK_DURATION_S = isParakeet ? (isMobile ? 30 : 2 * 60) : 10 * 60; // 30s mobile parakeet, 2m desktop, 10m others
+    // Parakeet handles long audio internally via windowed inference and streaming
+    // PCM decode — external chunking is unnecessary and adds overhead (especially
+    // the dispose/recreate cycle that was causing extreme slowdowns on mobile).
+    // Only Whisper models need external chunking.
+    const CHUNK_DURATION_S = isParakeet ? Infinity : 10 * 60;
     const SAMPLE_RATE = 16000;
-    const SAMPLES_PER_CHUNK = CHUNK_DURATION_S * SAMPLE_RATE;
+    const SAMPLES_PER_CHUNK = isParakeet ? Infinity : CHUNK_DURATION_S * SAMPLE_RATE;
 
     const fullAudio = message.audio;
     if (!fullAudio) return;
@@ -379,14 +379,7 @@ self.addEventListener("message", async (event) => {
       globalTps = chunkResult.tps; // keep last chunk's TPS
 
       if (offset + SAMPLES_PER_CHUNK < fullAudio.length) {
-        // On mobile, dispose the transcriber between chunks to fully release GPU
-        // memory (model weights, pipelines, buffers). The model reloads from
-        // Cache Storage in a few seconds — no network fetch needed.
-        if (isMobile && isParakeet && parakeetTranscriber) {
-          parakeetTranscriber.dispose();
-          parakeetTranscriber = null;
-        }
-        await new Promise(resolve => setTimeout(resolve, isMobile ? 1000 : 500));
+        await new Promise(resolve => setTimeout(resolve, 500));
       }
     }
 
