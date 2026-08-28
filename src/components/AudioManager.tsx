@@ -123,6 +123,7 @@ export function AudioManager(props: {
   const requestAbortControllerRef = useRef<AbortController | null>(null);
 
   const [showWarningModal, setShowWarningModal] = useState(false);
+  const [isHoveringFile, setIsHoveringFile] = useState(false);
 
   const startTranscription = useCallback(() => {
     if (audioData) {
@@ -305,59 +306,71 @@ export function AudioManager(props: {
 
   return (
     <>
-      <div id='upload-toolbar' className='flex flex-col justify-center items-center rounded-lg bg-white dark:bg-slate-800 shadow-xl shadow-black/5'>
-        <div className='flex flex-row space-x-3 py-2 w-full px-2'>
-          <UrlTile
-            icon={<AnchorIcon />}
-            text='From URL'
-            onUrlUpdate={handleUrlUpdate}
-          />
-          <VerticalBar />
-          <FileTile
-            icon={<FolderIcon />}
-            text='From file'
-            onProcessingChange={setIsAudioProcessing}
-            onFileUpdate={async (decoded, blob, sourceName, blobUrl, mimeType) => {
-              setAudioError(null);
+      <div className="relative flex flex-col items-center">
+        <div id='upload-toolbar' className='flex flex-col justify-center items-center rounded-lg bg-white dark:bg-slate-800 shadow-xl shadow-black/5 relative'>
+          <div className='flex flex-row space-x-3 py-2 w-full px-2'>
+            <UrlTile
+              icon={<AnchorIcon />}
+              text='From URL'
+              onUrlUpdate={handleUrlUpdate}
+            />
+            <VerticalBar />
+            <FileTile
+              icon={<FolderIcon />}
+              text='From file'
+              ariaDescribedBy='file-upload-ribbon'
+              onMouseEnter={() => setIsHoveringFile(true)}
+              onMouseLeave={() => setIsHoveringFile(false)}
+              onFocus={() => setIsHoveringFile(true)}
+              onBlur={() => setIsHoveringFile(false)}
+              onProcessingChange={setIsAudioProcessing}
+              onFileUpdate={async (decoded, blob, sourceName, blobUrl, mimeType) => {
+                setAudioError(null);
 
-              if (!decoded && (mimeType === 'text/srt' || mimeType === 'text/vtt' || sourceName.endsWith('.srt') || sourceName.endsWith('.vtt'))) {
-                const text = await blob.text();
-                const { parseSubtitleFile } = await import('../utils/SubtitleUtils');
-                const type = sourceName.endsWith('.vtt') ? 'vtt' : 'srt';
-                const parsed = parseSubtitleFile(text, type);
+                if (!decoded && (mimeType === 'text/srt' || mimeType === 'text/vtt' || sourceName.endsWith('.srt') || sourceName.endsWith('.vtt'))) {
+                  const text = await blob.text();
+                  const { parseSubtitleFile } = await import('../utils/SubtitleUtils');
+                  const type = sourceName.endsWith('.vtt') ? 'vtt' : 'srt';
+                  const parsed = parseSubtitleFile(text, type);
 
-                props.transcriber.setTranscript({
-                  isBusy: false,
-                  text: parsed.text,
-                  chunks: parsed.chunks,
-                  progress: 100,
-                });
-                setAudioData(undefined); // No audio to play
-              } else if (decoded) {
-                setAudioData({
-                  buffer: decoded,
-                  blob,
-                  sourceName,
-                  url: blobUrl,
-                  source: AudioSource.FILE,
-                  mimeType: mimeType,
-                });
-              }
-            }}
-          />
-          {navigator.mediaDevices && (
-            <>
-              <VerticalBar />
-              <RecordTile
-                icon={<MicrophoneIcon />}
-                text='Record'
-                setAudioData={(e) => {
-                  setAudioError(null);
-                  setAudioFromRecording(e);
-                }}
-              />
-            </>
-          )}
+                  props.transcriber.setTranscript({
+                    isBusy: false,
+                    text: parsed.text,
+                    chunks: parsed.chunks,
+                    progress: 100,
+                  });
+                  setAudioData(undefined); // No audio to play
+                } else if (decoded) {
+                  setAudioData({
+                    buffer: decoded,
+                    blob,
+                    sourceName,
+                    url: blobUrl,
+                    source: AudioSource.FILE,
+                    mimeType: mimeType,
+                  });
+                }
+              }}
+            />
+            {navigator.mediaDevices && (
+              <>
+                <VerticalBar />
+                <RecordTile
+                  icon={<MicrophoneIcon />}
+                  text='Record'
+                  setAudioData={(e) => {
+                    setAudioError(null);
+                    setAudioFromRecording(e);
+                  }}
+                />
+              </>
+            )}
+          </div>
+        </div>
+        <div className={`absolute top-full left-1/2 -translate-x-1/2 flex justify-center transition-all duration-300 ${isHoveringFile ? 'translate-y-0 opacity-100' : '-translate-y-full opacity-0 pointer-events-none'}`}>
+          <div id='file-upload-ribbon' className='file-upload-ribbon'>
+            Upload audio, video, or existing transcripts.
+          </div>
         </div>
       </div>
 
@@ -630,17 +643,21 @@ function SettingsModal(props: {
 
   const [cacheSize, setCacheSize] = useState<number>(0);
 
-  async function fetchCacheSize() {
-    if ("storage" in navigator && "estimate" in navigator.storage) {
-      const estimate = await navigator.storage.estimate();
-      const usage = Number(estimate.usage);
-      setCacheSize(~~(usage / 1000000));
-    } else {
-      setCacheSize(-1);
-    }
-  }
+  useEffect(() => {
+    if (!props.show) return;
 
-  fetchCacheSize();
+    async function fetchCacheSize() {
+      if ("storage" in navigator && "estimate" in navigator.storage) {
+        const estimate = await navigator.storage.estimate();
+        const usage = Number(estimate.usage);
+        setCacheSize(~~(usage / 1000000));
+      } else {
+        setCacheSize(-1);
+      }
+    }
+
+    fetchCacheSize();
+  }, [props.show]);
 
   // Get the language code of the selected model
   const getModelLanguage = () => {
@@ -850,6 +867,11 @@ function FileTile(props: {
     blobUrl: string,
     mimeType: string,
   ) => void;
+  onMouseEnter?: () => void;
+  onMouseLeave?: () => void;
+  onFocus?: () => void;
+  onBlur?: () => void;
+  ariaDescribedBy?: string;
 }) {
   // Create hidden input element
   const elem = document.createElement("input");
@@ -916,6 +938,11 @@ function FileTile(props: {
       text={props.text}
       isUploadButton
       onClick={() => elem.click()}
+      onMouseEnter={props.onMouseEnter}
+      onMouseLeave={props.onMouseLeave}
+      onFocus={props.onFocus}
+      onBlur={props.onBlur}
+      ariaDescribedBy={props.ariaDescribedBy}
     />
   );
 }
@@ -1004,8 +1031,13 @@ function Tile(props: {
   icon: JSX.Element;
   text?: string;
   ariaLabel?: string;
+  ariaDescribedBy?: string;
   title?: string;
   onClick?: () => void;
+  onMouseEnter?: () => void;
+  onMouseLeave?: () => void;
+  onFocus?: () => void;
+  onBlur?: () => void;
   isApplicationControl?: boolean;
   isUploadButton?: boolean;
 }) {
@@ -1013,7 +1045,12 @@ function Tile(props: {
     <button
       type='button'
       onClick={props.onClick}
+      onMouseEnter={props.onMouseEnter}
+      onMouseLeave={props.onMouseLeave}
+      onFocus={props.onFocus}
+      onBlur={props.onBlur}
       aria-label={props.ariaLabel ?? props.text}
+      aria-describedby={props.ariaDescribedBy}
       className={props.isApplicationControl
         ? 'control-button'
         : props.isUploadButton

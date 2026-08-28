@@ -26,6 +26,7 @@
 
 #upload-toolbar {
   border: 2px solid #334155;
+  z-index: 2;
 }
 
 .dark #upload-toolbar {
@@ -401,4 +402,32 @@
 [role='dialog'] p {
   padding-bottom: 0.5rem;
   font-size: 0.975rem;
+}
+
+/* File Upload Ribbon Styles */
+.file-upload-ribbon {
+  font-size: 1rem;
+  font-weight: 500;
+  padding: 0.375rem 1rem;
+  text-align: center;
+  border-bottom-left-radius: 0.5rem;
+  border-bottom-right-radius: 0.5rem;
+  width: max-content;
+  max-width: 24rem;
+
+  /* Match Button Hover Light Theme */
+  background-color: #fff;
+  color: #334155;
+  border: 2px solid #334155;
+  border-top: none;
+  box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
+}
+
+.dark .file-upload-ribbon {
+  /* Match Button Hover Dark Theme */
+  background-color: #1e293b;
+  color: var(--text);
+  border: 1px solid rgb(226, 232, 240);
+  border-top: none;
+  box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.3), 0 2px 4px -1px rgba(0, 0, 0, 0.2);
 }
