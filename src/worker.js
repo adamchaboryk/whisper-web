@@ -275,20 +275,103 @@ class PipelineFactory {
 self.addEventListener("message", async (event) => {
   const message = event.data;
 
-  try {
-    // Handle transcription request
-    const transcript = await transcribe(message);
-    if (transcript === null) return;
+  const originalPostMessage = self.postMessage;
 
-    // Send the result back to the main thread
+  try {
+    const CHUNK_DURATION_S = 10 * 60; // 10 minutes
+    const SAMPLE_RATE = 16000;
+    const SAMPLES_PER_CHUNK = CHUNK_DURATION_S * SAMPLE_RATE;
+
+    const fullAudio = message.audio;
+    if (!fullAudio) return;
+
+    let allChunks = [];
+    let fullText = "";
+    let globalTps = 0;
+    const globalDuration = message.duration;
+
+    let currentTimeOffset = 0;
+    let currentOffset = 0;
+
+    for (let offset = 0; offset < fullAudio.length; offset += SAMPLES_PER_CHUNK) {
+      const audioChunk = fullAudio.subarray(offset, offset + SAMPLES_PER_CHUNK);
+      currentTimeOffset = offset / SAMPLE_RATE;
+      currentOffset = offset;
+
+      const chunkMessage = {
+        ...message,
+        audio: audioChunk,
+        duration: audioChunk.length / SAMPLE_RATE
+      };
+
+      self.postMessage = (msg) => {
+        if (msg.status === "update") {
+          const shiftedChunks = msg.data.chunks.map(c => ({
+            ...c,
+            timestamp: [
+              c.timestamp[0] !== null ? c.timestamp[0] + currentTimeOffset : null,
+              c.timestamp[1] !== null ? c.timestamp[1] + currentTimeOffset : null
+            ]
+          }));
+
+          originalPostMessage({
+            status: "update",
+            data: {
+              text: fullText + (fullText ? " " : "") + msg.data.text,
+              chunks: [...allChunks, ...shiftedChunks],
+              tps: msg.data.tps,
+              duration: globalDuration,
+              progress: ((offset + audioChunk.length) / fullAudio.length) * 100
+            }
+          });
+        } else if (msg.status === "transcription_progress") {
+          const chunkProgress = msg.data.progress;
+          const overallProgress = ((offset / fullAudio.length) * 100) + (chunkProgress * (audioChunk.length / fullAudio.length));
+          originalPostMessage({
+            status: "transcription_progress",
+            data: { progress: overallProgress }
+          });
+        } else {
+          originalPostMessage(msg);
+        }
+      };
+
+      const chunkResult = await transcribe(chunkMessage);
+
+      if (!chunkResult) {
+        self.postMessage = originalPostMessage;
+        return; // Abort on error
+      }
+
+      const shiftedChunks = chunkResult.chunks.map(c => ({
+        ...c,
+        timestamp: [
+          c.timestamp[0] !== null ? c.timestamp[0] + currentTimeOffset : null,
+          c.timestamp[1] !== null ? c.timestamp[1] + currentTimeOffset : null
+        ]
+      }));
+
+      allChunks.push(...shiftedChunks);
+      fullText += (fullText ? " " : "") + chunkResult.text;
+      globalTps = chunkResult.tps; // keep last chunk's TPS
+    }
+
+    self.postMessage = originalPostMessage;
+
     self.postMessage({
       status: "complete",
-      data: transcript,
+      data: {
+        text: fullText,
+        chunks: allChunks,
+        tps: globalTps,
+        duration: globalDuration
+      },
     });
   } catch (error) {
-    // Structured-clone of the result can fail (e.g. out of memory) for very
-    // large transcripts; report it instead of letting the worker crash silently.
     console.error(error);
+    if (self.postMessage !== originalPostMessage) {
+      self.postMessage = originalPostMessage;
+    }
     self.postMessage({
       status: "error",
       data: { message: error?.message ?? String(error) },

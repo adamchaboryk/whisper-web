@@ -102,8 +102,8 @@ function EditableChunk(props: {
 
   useLayoutEffect(() => {
     const editor = editorRef.current;
-    if (editor && document.activeElement !== editor && editor.textContent !== props.text) {
-      editor.textContent = props.text;
+    if (editor && document.activeElement !== editor && editor.innerText !== props.text) {
+      editor.innerText = props.text;
     }
   }, [props.text]);
 
@@ -115,7 +115,7 @@ function EditableChunk(props: {
       suppressContentEditableWarning
       role='textbox'
       aria-label={props.label}
-      onInput={(event) => props.onTextChange?.(event.currentTarget.textContent ?? "")}
+      onInput={(event) => props.onTextChange?.(event.currentTarget.innerText ?? "")}
     />
   );
 }

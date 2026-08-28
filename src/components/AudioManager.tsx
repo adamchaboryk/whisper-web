@@ -80,6 +80,25 @@ function titleCase(str: string) {
     .join("");
 }
 
+function getModelSize(model: string, dtype: string): string {
+  let baseMB = 0;
+  if (model === "parakeet.wgsl") baseMB = 120;
+  else if (model.includes("base")) baseMB = 75;
+  else if (model.includes("small")) baseMB = 240;
+  else if (model.includes("large")) baseMB = 1500;
+  else baseMB = 75; // tiny or default
+
+  if (model !== "parakeet.wgsl") {
+    if (dtype === "q8") baseMB *= 2;
+    else if (dtype === "fp16") baseMB *= 4;
+  }
+
+  if (baseMB >= 1000) {
+    return (baseMB / 1000).toFixed(1) + " GB";
+  }
+  return baseMB + " MB";
+}
+
 export function AudioManager(props: {
   transcriber: Transcriber;
   onGenerateSummary?: () => void;
@@ -102,6 +121,27 @@ export function AudioManager(props: {
     | undefined
   >(undefined);
   const requestAbortControllerRef = useRef<AbortController | null>(null);
+
+  const [showWarningModal, setShowWarningModal] = useState(false);
+
+  const startTranscription = useCallback(() => {
+    if (audioData) {
+      props.transcriber.start(
+        audioData.buffer,
+        audioData.blob,
+        audioData.sourceName,
+        audioData.mimeType === "video/mp4",
+      );
+    }
+  }, [audioData, props.transcriber]);
+
+  const handleTranscribeClick = useCallback(() => {
+    if (!localStorage.getItem("hasAcceptedTranscriptionWarning")) {
+      setShowWarningModal(true);
+    } else {
+      startTranscription();
+    }
+  }, [startTranscription]);
 
   // Combine all in-flight model file downloads into a single byte-weighted percentage.
   const overallModelLoadProgress = useMemo(() => {
@@ -241,8 +281,6 @@ export function AudioManager(props: {
 
   const handleUrlUpdate = useCallback(
     (url: string) => {
-      props.transcriber.onInputChange();
-
       if (requestAbortControllerRef.current) {
         requestAbortControllerRef.current.abort();
       }
@@ -273,17 +311,32 @@ export function AudioManager(props: {
             icon={<FolderIcon />}
             text='From file'
             onProcessingChange={setIsAudioProcessing}
-            onFileUpdate={(decoded, blob, sourceName, blobUrl, mimeType) => {
-              props.transcriber.onInputChange();
+            onFileUpdate={async (decoded, blob, sourceName, blobUrl, mimeType) => {
               setAudioError(null);
-              setAudioData({
-                buffer: decoded,
-                blob,
-                sourceName,
-                url: blobUrl,
-                source: AudioSource.FILE,
-                mimeType: mimeType,
-              });
+
+              if (!decoded && (mimeType === 'text/srt' || mimeType === 'text/vtt' || sourceName.endsWith('.srt') || sourceName.endsWith('.vtt'))) {
+                const text = await blob.text();
+                const { parseSubtitleFile } = await import('../utils/SubtitleUtils');
+                const type = sourceName.endsWith('.vtt') ? 'vtt' : 'srt';
+                const parsed = parseSubtitleFile(text, type);
+
+                props.transcriber.setTranscript({
+                  isBusy: false,
+                  text: parsed.text,
+                  chunks: parsed.chunks,
+                  progress: 100,
+                });
+                setAudioData(undefined); // No audio to play
+              } else if (decoded) {
+                setAudioData({
+                  buffer: decoded,
+                  blob,
+                  sourceName,
+                  url: blobUrl,
+                  source: AudioSource.FILE,
+                  mimeType: mimeType,
+                });
+              }
             }}
           />
           {navigator.mediaDevices && (
@@ -293,7 +346,6 @@ export function AudioManager(props: {
                 icon={<MicrophoneIcon />}
                 text='Record'
                 setAudioData={(e) => {
-                  props.transcriber.onInputChange();
                   setAudioError(null);
                   setAudioFromRecording(e);
                 }}
@@ -343,14 +395,7 @@ export function AudioManager(props: {
             {(!props.transcriber.output || props.transcriber.isBusy) && (
               <TranscribeButton
                 ref={transcribeButtonRef}
-                onClick={() => {
-                  props.transcriber.start(
-                    audioData.buffer,
-                    audioData.blob,
-                    audioData.sourceName,
-                    audioData.mimeType === "video/mp4",
-                  );
-                }}
+                onClick={handleTranscribeClick}
                 isModelLoading={props.transcriber.isModelLoading}
                 modelLoadingProgress={overallModelLoadProgress}
                 isTranscribing={props.transcriber.isBusy}
@@ -359,6 +404,33 @@ export function AudioManager(props: {
             )}
           </div>
         </>
+      )}
+
+      {showWarningModal && (
+        <Modal
+          show={showWarningModal}
+          title="Download required"
+          content={
+            <div className="text-slate-700 dark:text-slate-300">
+              <p className="mb-4">
+                Transcription runs privately in your browser. Proceeding will save a {getModelSize(props.transcriber.model, props.transcriber.dtype)} model to your browser's temporary storage so it works offline. You can change models anytime in <em>Settings.</em>
+              </p>
+              {typeof navigator !== "undefined" && (navigator as any).connection?.type === "cellular" && (
+                <p className="mt-4 font-semibold text-amber-600 dark:text-amber-500">
+                  ⚠️ It does not appear you are connected to Wi-Fi. Downloading the model over cellular data may incur charges.
+                </p>
+              )}
+            </div>
+          }
+          onClose={() => setShowWarningModal(false)}
+          submitText="Proceed"
+          submitEnabled={true}
+          onSubmit={() => {
+            localStorage.setItem("hasAcceptedTranscriptionWarning", "true");
+            setShowWarningModal(false);
+            startTranscription();
+          }}
+        />
       )}
     </>
   );
@@ -761,7 +833,7 @@ function FileTile(props: {
   text: string;
   onProcessingChange: (isProcessing: boolean) => void;
   onFileUpdate: (
-    decoded: AudioBuffer,
+    decoded: AudioBuffer | undefined,
     blob: Blob,
     sourceName: string,
     blobUrl: string,
@@ -771,43 +843,57 @@ function FileTile(props: {
   // Create hidden input element
   const elem = document.createElement("input");
   elem.type = "file";
-  elem.accept = "audio/*,video/*";
+  elem.accept = "audio/*,video/*,.srt,.vtt";
   elem.oninput = (event) => {
     // Make sure we have files to use
     const files = (event.target as HTMLInputElement).files;
     if (!files) return;
 
     const file = files[0];
-    if (
-      !file ||
-      (!file.type.startsWith("audio/") && !file.type.startsWith("video/"))
-    ) return;
+    if (!file) return;
+
+    const isAudioVideo = file.type.startsWith("audio/") || file.type.startsWith("video/");
+    const isSubtitle = file.name.endsWith(".srt") || file.name.endsWith(".vtt");
+
+    if (!isAudioVideo && !isSubtitle) return;
 
     // Create a blob that we can use as an src for our audio element
     const urlObj = URL.createObjectURL(file);
-    const mimeType = file.type;
+    const mimeType = file.type || (file.name.endsWith(".srt") ? "text/srt" : "text/vtt");
 
     props.onProcessingChange(true);
 
     const reader = new FileReader();
     reader.addEventListener("load", async (e) => {
       try {
-        const arrayBuffer = e.target?.result as ArrayBuffer; // Get the ArrayBuffer
-        if (!arrayBuffer) return;
+        if (isSubtitle) {
+          const text = e.target?.result as string;
+          // Decode later or pass text
+          // For subtitles, we can pass undefined for AudioBuffer
+          // and store the text in the blob or parse it in the parent.
+          props.onFileUpdate(undefined as any, file, file.name, urlObj, mimeType);
+        } else {
+          const arrayBuffer = e.target?.result as ArrayBuffer; // Get the ArrayBuffer
+          if (!arrayBuffer) return;
 
-        const audioCTX = new AudioContext({
-          sampleRate: Constants.SAMPLING_RATE,
-        });
+          const audioCTX = new AudioContext({
+            sampleRate: Constants.SAMPLING_RATE,
+          });
 
-        const decoded = await audioCTX.decodeAudioData(arrayBuffer);
-
-        props.onFileUpdate(decoded, file, file.name, urlObj, mimeType);
+          const decoded = await audioCTX.decodeAudioData(arrayBuffer);
+          props.onFileUpdate(decoded, file, file.name, urlObj, mimeType);
+        }
       } finally {
         props.onProcessingChange(false);
       }
     });
     reader.addEventListener("error", () => props.onProcessingChange(false));
-    reader.readAsArrayBuffer(file);
+
+    if (isSubtitle) {
+      reader.readAsText(file);
+    } else {
+      reader.readAsArrayBuffer(file);
+    }
 
     // Reset files
     elem.value = "";

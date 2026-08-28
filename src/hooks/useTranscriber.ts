@@ -221,6 +221,7 @@ export interface Transcriber {
   setLanguage: (language: string) => void;
   summary?: SummaryData;
   summarize: (text: string) => void;
+  setTranscript: (data: TranscriberData | undefined) => void;
 }
 
 export function useTranscriber(): Transcriber {
@@ -632,6 +633,7 @@ export function useTranscriber(): Transcriber {
       setLanguage: setStoredLanguage,
       summary,
       summarize: summarizeRequest,
+      setTranscript,
     };
   }, [
     onInputChange,
@@ -653,6 +655,7 @@ export function useTranscriber(): Transcriber {
     setStoredLanguage,
     summary,
     summarizeRequest,
+    setTranscript,
   ]);
 
   return transcriber;
