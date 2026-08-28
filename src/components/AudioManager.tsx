@@ -82,7 +82,7 @@ function titleCase(str: string) {
 
 function getModelSize(model: string, dtype: string): string {
   let baseMB = 0;
-  if (model === "parakeet.wgsl") baseMB = 120;
+  if (model === "parakeet.wgsl") baseMB = 405;
   else if (model.includes("base")) baseMB = 75;
   else if (model.includes("small")) baseMB = 240;
   else if (model.includes("large")) baseMB = 1500;

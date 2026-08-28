@@ -278,7 +278,8 @@ self.addEventListener("message", async (event) => {
   const originalPostMessage = self.postMessage;
 
   try {
-    const CHUNK_DURATION_S = 10 * 60; // 10 minutes
+    const isParakeet = message.model === "parakeet.wgsl";
+    const CHUNK_DURATION_S = isParakeet ? 30 : 10 * 60; // 30s for parakeet, 10m for others
     const SAMPLE_RATE = 16000;
     const SAMPLES_PER_CHUNK = CHUNK_DURATION_S * SAMPLE_RATE;
 
