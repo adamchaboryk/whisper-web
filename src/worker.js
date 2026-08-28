@@ -346,9 +346,12 @@ self.addEventListener("message", async (event) => {
         // On mobile, WebGPU device-lost errors or TDT output overflows are common.
         // Fall back to Whisper tiny (WASM) for the current chunk rather than aborting.
         if (isParakeet && /device.*lost|gpu.*lost|out.*memory|overflow/i.test(error?.message ?? String(error))) {
-          console.warn("[whisper-web] WebGPU error (device lost or overflow) during parakeet transcription, falling back to Whisper tiny for this chunk");
-          // Dispose the broken transcriber so it's recreated fresh if needed later
-          if (parakeetTranscriber) {
+          const isOverflow = /overflow/i.test(error?.message ?? String(error));
+          console.warn(`[whisper-web] WebGPU error (${isOverflow ? "overflow" : "device lost"}) during parakeet transcription, falling back to Whisper tiny for this chunk`);
+
+          // Only dispose the transcriber if it's a hard crash (device lost/OOM).
+          // If it's just an overflow (inference failure on a specific chunk), we can keep the model loaded.
+          if (!isOverflow && parakeetTranscriber) {
             try { parakeetTranscriber.dispose(); } catch { /* already dead */ }
             parakeetTranscriber = null;
           }
@@ -518,6 +521,8 @@ const transcribe = async ({ audio, formatForCaptions, model, dtype, gpu, subtask
     task: subtask,
     return_timestamps: true,
     force_full_sequences: false,
+    condition_on_previous_text: false, // Prevents Whisper from getting stuck in repetition loops
+    no_repeat_ngram_size: 3,           // Further hallucination suppression
     streamer,
   }).catch((error) => {
     console.error(error);
