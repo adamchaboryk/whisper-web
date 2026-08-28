@@ -343,10 +343,10 @@ self.addEventListener("message", async (event) => {
       };
 
       let chunkResult = await transcribe(chunkMessage).catch(error => {
-        // On mobile, WebGPU device-lost errors are common due to GPU memory pressure.
-        // Fall back to Whisper base (WASM) for the current chunk rather than aborting.
-        if (isParakeet && /device.*lost|gpu.*lost|out.*memory/i.test(error?.message ?? String(error))) {
-          console.warn("[whisper-web] WebGPU device lost during parakeet transcription, falling back to Whisper base for this chunk");
+        // On mobile, WebGPU device-lost errors or TDT output overflows are common.
+        // Fall back to Whisper tiny (WASM) for the current chunk rather than aborting.
+        if (isParakeet && /device.*lost|gpu.*lost|out.*memory|overflow/i.test(error?.message ?? String(error))) {
+          console.warn("[whisper-web] WebGPU error (device lost or overflow) during parakeet transcription, falling back to Whisper tiny for this chunk");
           // Dispose the broken transcriber so it's recreated fresh if needed later
           if (parakeetTranscriber) {
             try { parakeetTranscriber.dispose(); } catch { /* already dead */ }
@@ -354,7 +354,7 @@ self.addEventListener("message", async (event) => {
           }
           return transcribe({
             ...chunkMessage,
-            model: "onnx-community/whisper-base",
+            model: "onnx-community/whisper-tiny",
             dtype: "q8",
             gpu: false,
           });
