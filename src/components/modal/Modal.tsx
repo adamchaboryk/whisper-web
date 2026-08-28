@@ -25,7 +25,13 @@ export default function Modal({
 
   const onClear = async () => {
     onClose();
-    caches.delete('transformers-cache');
+    try {
+      if (typeof caches !== 'undefined') {
+        await caches.delete('transformers-cache');
+      }
+    } catch (e) {
+      console.warn("Failed to delete transformers cache", e);
+    }
 
     try {
       const { deleteCachedModels } = await import('parakeet.wgsl');
@@ -86,7 +92,7 @@ export default function Modal({
                       onClick={onClear}
                     >
                       <svg
-                        className='h-5 w-5'
+                        className='h-5 w-5 pointer-events-none'
                         viewBox='0 0 20 20'
                         fill='none'
                         stroke='currentColor'

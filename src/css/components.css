@@ -414,17 +414,18 @@
   border-bottom-right-radius: 0.5rem;
   width: max-content;
   max-width: 24rem;
-
-  /* Match Button Hover Light Theme */
   background-color: #fff;
   color: #334155;
   border: 2px solid #334155;
   border-top: none;
   box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
+
+  @media (max-width: 480px) {
+    max-width: 300px;
+  }
 }
 
 .dark .file-upload-ribbon {
-  /* Match Button Hover Dark Theme */
   background-color: #1e293b;
   color: var(--text);
   border: 1px solid rgb(226, 232, 240);
