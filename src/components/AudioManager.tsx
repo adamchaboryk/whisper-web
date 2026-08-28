@@ -461,9 +461,12 @@ export function ApplicationControls(props: {
             <p>Summaries are generated locally using a experimental built-in browser AI (Google Gemini Nano). This feature is currently only supported in Google Chrome.</p>
 
             <h3>Acknowledgements</h3>
-            <p>Maintained by <a href='mailto:adam.chaboryk@torontomu.ca'>Adam Chaboryk,</a> Digital Media Projects, Computing and Communications Services at Toronto Metropolitan University.</p>
+            <p>Maintained by Adam Chaboryk, Digital Media Projects, Computing and Communications Services at Toronto Metropolitan University.</p>
 
             <p>This tool is a customized fork of <a href='https://huggingface.co/Xenova'>Joshua Lochner's Whisper Web project.</a> This project also incorporates <a href="https://github.com/narcotic-sh/parakeet.wgsl">Hamza Qayyum's parakeet.wgsl project.</a></p>
+
+            <h3>Open source</h3>
+            <p>Email feedback to <a href='mailto:adam.chaboryk@torontomu.ca'>adam.chaboryk@torontomu.ca</a> or view <a href="https://github.com/adamchaboryk/whisper-web">source code on GitHub.</a></p>
           </>}
         />
         <Tile
@@ -867,7 +870,7 @@ function FileTile(props: {
     reader.addEventListener("load", async (e) => {
       try {
         if (isSubtitle) {
-          const text = e.target?.result as string;
+          // const text = e.target?.result as string;
           // Decode later or pass text
           // For subtitles, we can pass undefined for AudioBuffer
           // and store the text in the blob or parse it in the parent.
