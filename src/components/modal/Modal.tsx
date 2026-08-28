@@ -23,9 +23,16 @@ export default function Modal({
   cacheSize = 0,
 }: Props) {
 
-  const onClear = () => {
+  const onClear = async () => {
     onClose();
     caches.delete('transformers-cache');
+
+    try {
+      const { deleteCachedModels } = await import('parakeet.wgsl');
+      await deleteCachedModels();
+    } catch (e) {
+      console.warn("Failed to delete parakeet caches", e);
+    }
 
     try {
       window.localStorage.removeItem('whisper-web-settings');
