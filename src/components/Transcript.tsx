@@ -319,7 +319,9 @@ export default function Transcript({
 
     const milestoneProgress = Math.floor(transcribedData.progress / 20) * 20;
     if (milestoneProgress >= 20 && milestoneProgress > (lastAnnouncedProgress ?? -20)) {
-      setLastAnnouncedProgress(milestoneProgress);
+      setTimeout(() => {
+        setLastAnnouncedProgress(milestoneProgress);
+      }, 0);
     }
   }, [transcribedData?.isBusy, transcribedData?.progress, lastAnnouncedProgress]);
 

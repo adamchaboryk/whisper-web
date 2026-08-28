@@ -487,7 +487,7 @@ export function useTranscriber(): Transcriber {
         );
       }
     },
-    [webWorker, model, dtype, gpu, subtask, language],
+    [webWorker, model, dtype, gpu, subtask, language, setStoredModel],
   );
 
   const summarizeRequest = useCallback(

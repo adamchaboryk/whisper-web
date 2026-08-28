@@ -279,7 +279,7 @@ self.addEventListener("message", async (event) => {
 
   try {
     const isParakeet = message.model === "parakeet.wgsl";
-    const CHUNK_DURATION_S = isParakeet ? 30 : 10 * 60; // 30s for parakeet, 10m for others
+    const CHUNK_DURATION_S = isParakeet ? 2 * 60 : 10 * 60; // 2m for parakeet, 10m for others
     const SAMPLE_RATE = 16000;
     const SAMPLES_PER_CHUNK = CHUNK_DURATION_S * SAMPLE_RATE;
 
@@ -355,6 +355,10 @@ self.addEventListener("message", async (event) => {
       allChunks.push(...shiftedChunks);
       fullText += (fullText ? " " : "") + chunkResult.text;
       globalTps = chunkResult.tps; // keep last chunk's TPS
+
+      if (offset + SAMPLES_PER_CHUNK < fullAudio.length) {
+        await new Promise(resolve => setTimeout(resolve, 500)); // allow GPU to breathe and GC
+      }
     }
 
     self.postMessage = originalPostMessage;

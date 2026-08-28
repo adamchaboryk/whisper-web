@@ -256,20 +256,26 @@ export function AudioManager(props: {
 
   useEffect(() => {
     if (!audioData) {
-      setAudioReadyAnnouncement("");
-      return;
+      const frame = window.requestAnimationFrame(() => {
+        setAudioReadyAnnouncement("");
+      });
+      return () => window.cancelAnimationFrame(frame);
     }
 
-    setAudioReadyAnnouncement("");
-    const frame = window.requestAnimationFrame(() => {
-      setAudioReadyAnnouncement("Audio upload completed.");
-      transcribeButtonRef.current?.focus();
+    let frame2: number;
+    const frame1 = window.requestAnimationFrame(() => {
+      setAudioReadyAnnouncement("");
+      frame2 = window.requestAnimationFrame(() => {
+        setAudioReadyAnnouncement("Audio upload completed.");
+        transcribeButtonRef.current?.focus();
+      });
     });
 
     return () => {
-      window.cancelAnimationFrame(frame);
+      window.cancelAnimationFrame(frame1);
+      if (frame2 !== undefined) window.cancelAnimationFrame(frame2);
     };
-  }, [audioData?.url]);
+  }, [audioData]);
 
   useEffect(() => {
     return () => {
@@ -289,7 +295,7 @@ export function AudioManager(props: {
       requestAbortControllerRef.current = requestAbortController;
       downloadAudioFromUrl(requestAbortController, url);
     },
-    [downloadAudioFromUrl, props.transcriber],
+    [downloadAudioFromUrl],
   );
 
   const sampleAudioUrl = new URL(
@@ -415,7 +421,7 @@ export function AudioManager(props: {
               <p className="mb-4">
                 Transcription runs privately in your browser. Proceeding will save a {getModelSize(props.transcriber.model, props.transcriber.dtype)} model to your browser's temporary storage so it works offline. You can change models anytime in <em>Settings.</em>
               </p>
-              {typeof navigator !== "undefined" && (navigator as any).connection?.type === "cellular" && (
+              {typeof navigator !== "undefined" && (navigator as unknown as { connection?: { type?: string } }).connection?.type === "cellular" && (
                 <p className="mt-4 font-semibold text-amber-600 dark:text-amber-500">
                   ⚠️ It does not appear you are connected to Wi-Fi. Downloading the model over cellular data may incur charges.
                 </p>
@@ -574,8 +580,10 @@ function SettingsModal(props: {
 
   useEffect(() => {
     if (!HAS_WEBGPU_API) {
-      setIsWebgpuAvailable(false);
-      setHasCheckedWebgpu(true);
+      setTimeout(() => {
+        setIsWebgpuAvailable(false);
+        setHasCheckedWebgpu(true);
+      }, 0);
       return;
     }
 
@@ -874,7 +882,7 @@ function FileTile(props: {
           // Decode later or pass text
           // For subtitles, we can pass undefined for AudioBuffer
           // and store the text in the blob or parse it in the parent.
-          props.onFileUpdate(undefined as any, file, file.name, urlObj, mimeType);
+          props.onFileUpdate(undefined, file, file.name, urlObj, mimeType);
         } else {
           const arrayBuffer = e.target?.result as ArrayBuffer; // Get the ArrayBuffer
           if (!arrayBuffer) return;

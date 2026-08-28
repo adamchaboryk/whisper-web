@@ -21,8 +21,9 @@ export default function AudioPlayer(props: {
     }
   }, [props.audioUrl]);
 
+  const { onSeekReady } = props;
   useEffect(() => {
-    props.onSeekReady?.((time) => {
+    onSeekReady?.((time) => {
       const mediaPlayer = audioPlayer.current ?? videoPlayer.current;
       if (!mediaPlayer) {
         return;
@@ -31,7 +32,7 @@ export default function AudioPlayer(props: {
       mediaPlayer.currentTime = time;
       void mediaPlayer.play().catch(() => undefined);
     });
-  }, [props.onSeekReady]);
+  }, [onSeekReady]);
 
   const subtitleUrl = useMemo(() => {
     if (!props.mimeType.startsWith("video/") || props.isTranscribing || !props.transcriptChunks?.length) {
