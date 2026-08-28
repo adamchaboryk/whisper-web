@@ -279,13 +279,14 @@ self.addEventListener("message", async (event) => {
 
   try {
     const isParakeet = message.model === "parakeet.wgsl";
-    // Parakeet handles long audio internally via windowed inference and streaming
-    // PCM decode — external chunking is unnecessary and adds overhead (especially
-    // the dispose/recreate cycle that was causing extreme slowdowns on mobile).
-    // Only Whisper models need external chunking.
-    const CHUNK_DURATION_S = isParakeet ? Infinity : 10 * 60;
+    // Parakeet needs external chunking to avoid "TDT output overflow" errors on
+    // long audio, but the transcriber stays alive between chunks — no
+    // dispose/recreate, so there's no model-reload overhead. If a chunk hits a
+    // device-lost error (common on mobile), the error handler falls back to
+    // Whisper for that chunk and the next chunk re-creates the transcriber.
+    const CHUNK_DURATION_S = isParakeet ? 2 * 60 : 10 * 60;
     const SAMPLE_RATE = 16000;
-    const SAMPLES_PER_CHUNK = isParakeet ? Infinity : CHUNK_DURATION_S * SAMPLE_RATE;
+    const SAMPLES_PER_CHUNK = CHUNK_DURATION_S * SAMPLE_RATE;
 
     const fullAudio = message.audio;
     if (!fullAudio) return;
