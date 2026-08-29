@@ -365,7 +365,7 @@ self.addEventListener("message", async (event) => {
       };
 
       let chunkResult = await transcribe(chunkMessage).catch(async (error) => {
-        if (isParakeet && /device.*lost|gpu.*lost|out.*memory|overflow/i.test(error?.message ?? String(error))) {
+        if (isParakeet && /device.*lost|gpu.*lost|out.*memory|overflow|invalid.*token/i.test(error?.message ?? String(error))) {
           console.warn("[whisper-web] WebGPU crashed during native transcription. Attempting to recover from partial snapshot.");
 
           if (parakeetTranscriber) {
@@ -390,6 +390,15 @@ self.addEventListener("message", async (event) => {
       if (!chunkResult) {
         self.postMessage = originalPostMessage;
         return; // Abort on error
+      }
+
+      // If transcribeWithParakeet returned a partial result, it means it caught a crash,
+      // saved the progress, but the underlying model is still poisoned. We MUST dispose it.
+      if (chunkResult.isPartial && isParakeet && parakeetTranscriber) {
+        console.warn("[whisper-web] Recovered partial snapshot. Disposing poisoned model.");
+        try { parakeetTranscriber.dispose(); } catch { }
+        parakeetTranscriber = null;
+        await new Promise(resolve => setTimeout(resolve, 2500));
       }
 
       // Format the chunks from this iteration
