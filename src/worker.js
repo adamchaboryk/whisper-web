@@ -222,41 +222,22 @@ const transcribeWithParakeet = async ({ audio, formatForCaptions }) => {
     return chunks;
   };
 
-  let lastSnapshot = null;
   const result = await parakeetTranscriber.transcribe(audioBlob, {
     sourceName: "audio.wav",
-    onPartialResult: (snapshot) => {
-      lastSnapshot = snapshot;
-    }
-  }).catch(error => {
-    // If it crashed but we have a snapshot, return the partial progress.
-    if (lastSnapshot && lastSnapshot.processedAudioSeconds > 0) {
-      return {
-        isPartial: true,
-        text: lastSnapshot.text,
-        words: lastSnapshot.words,
-        metrics: {
-          speedFactor: 0,
-          audioDurationSeconds: lastSnapshot.processedAudioSeconds
-        }
-      };
-    }
-    throw error;
   });
 
+  const words = result.words ?? [];
+
   return {
-    text: result.text,
+    text: result.text ?? "",
     chunks: formatForCaptions
-      ? toCaptionChunks(toChunks(result.words, true))
-      : toChunks(result.words, false).map((chunk) => ({
+      ? toCaptionChunks(toChunks(words, true))
+      : toChunks(words, false).map((chunk) => ({
         ...chunk,
         text: chunk.text.replace(/\n/g, " "),
       })),
     tps: result.metrics.speedFactor,
     duration: result.metrics.audioDurationSeconds,
-
-    isPartial: result.isPartial,
-    error: result.error
   };
 };
 
@@ -300,9 +281,9 @@ self.addEventListener("message", async (event) => {
     const fullAudio = message.audio;
     if (!fullAudio) return;
 
-    // On mobile, pre-slice into 3-minute segments to avoid OOM crashes.
+    // On mobile, pre-slice into 30-second segments to avoid OOM/overflow crashes.
     // On desktop, transcribe everything in one shot.
-    const SEGMENT_DURATION_S = isMobile ? 180 : Infinity;
+    const SEGMENT_DURATION_S = isMobile ? 30 : Infinity;
     // Guard against Infinity * SAMPLE_RATE producing Infinity — use fullAudio.length as fallback.
     const SEGMENT_SAMPLES = isFinite(SEGMENT_DURATION_S)
       ? Math.floor(SEGMENT_DURATION_S * SAMPLE_RATE)
