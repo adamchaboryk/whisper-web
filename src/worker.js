@@ -100,7 +100,7 @@ const toCaptionChunks = (chunks) => {
   return captionChunks;
 };
 
-const transcribeWithParakeet = async ({ audio, formatForCaptions }) => {
+const transcribeWithParakeet = async ({ audio, formatForCaptions, chunkOffset = 0, fullAudioLength = 0, accumulatedText = "", accumulatedChunks = [], globalDuration = 0, globalTps = 0 }) => {
   const audioBlob = createCanonicalWav(audio);
   audio = null;
 
@@ -222,19 +222,43 @@ const transcribeWithParakeet = async ({ audio, formatForCaptions }) => {
     return chunks;
   };
 
+  const currentTimeOffset = chunkOffset / 16000;
+
   let lastSnapshot = null;
   const result = await parakeetTranscriber.transcribe(audioBlob, {
     sourceName: "audio.wav",
-    onProgress: ({ fraction }) => {
-      self.postMessage({
-        status: "transcription_progress",
-        data: {
-          progress: fraction * 100,
-        },
-      });
-    },
     onPartialResult: (snapshot) => {
       lastSnapshot = snapshot;
+
+      // Use processedAudioSeconds from the snapshot — this is the only reliable
+      // measure of how much audio has actually been decoded (not compute fraction).
+      if (fullAudioLength > 0 && snapshot.processedAudioSeconds > 0) {
+        const processedSamples = chunkOffset + snapshot.processedAudioSeconds * 16000;
+        const overallProgress = (processedSamples / fullAudioLength) * 100;
+
+        // Build live partial chunks shifted by the current chunk offset
+        const liveWords = snapshot.words ?? [];
+        const liveChunks = toChunks(liveWords, formatForCaptions).map(c => ({
+          ...c,
+          timestamp: [
+            c.timestamp[0] !== null ? c.timestamp[0] + currentTimeOffset : null,
+            c.timestamp[1] !== null ? c.timestamp[1] + currentTimeOffset : null
+          ]
+        }));
+
+        const liveText = snapshot.text ?? "";
+
+        self.postMessage({
+          status: "update",
+          data: {
+            text: accumulatedText + (accumulatedText && liveText ? " " : "") + liveText,
+            chunks: [...accumulatedChunks, ...liveChunks],
+            tps: globalTps,
+            duration: globalDuration,
+            progress: Math.min(overallProgress, 99) // cap at 99 until chunk completes
+          }
+        });
+      }
     }
   }).catch(error => {
     // If it crashed but we have a snapshot, return the partial progress.
@@ -267,6 +291,7 @@ const transcribeWithParakeet = async ({ audio, formatForCaptions }) => {
     error: result.error
   };
 };
+
 
 // Define model factories
 // Ensures only one model is created of each type
@@ -336,49 +361,43 @@ self.addEventListener("message", async (event) => {
       const chunkMessage = {
         ...message,
         audio: audioChunk,
-        duration: audioChunk.length / SAMPLE_RATE
+        duration: audioChunk.length / SAMPLE_RATE,
+        // Context for Parakeet's onPartialResult progress (Parakeet only)
+        chunkOffset: offset,
+        fullAudioLength: fullAudio.length,
+        accumulatedText: fullText,
+        accumulatedChunks: allChunks,
+        globalDuration,
+        globalTps,
       };
 
-      self.postMessage = (msg) => {
-        if (msg.status === "update") {
-          const shiftedChunks = msg.data.chunks.map(c => ({
-            ...c,
-            timestamp: [
-              c.timestamp[0] !== null ? c.timestamp[0] + currentTimeOffset : null,
-              c.timestamp[1] !== null ? c.timestamp[1] + currentTimeOffset : null
-            ]
-          }));
-
-          originalPostMessage({
-            status: "update",
-            data: {
-              text: fullText + (fullText ? " " : "") + msg.data.text,
-              chunks: [...allChunks, ...shiftedChunks],
-              tps: msg.data.tps,
-              duration: globalDuration,
-              progress: ((offset + (msg.data.progress / 100 * audioChunk.length)) / fullAudio.length) * 100
-            }
-          });
-        } else if (msg.status === "transcription_progress") {
-          const chunkProgress = msg.data.progress;
-          const overallProgress = ((offset / fullAudio.length) * 100) + (chunkProgress * (audioChunk.length / fullAudio.length));
-
-          // Send as "update" instead of "transcription_progress" so the UI initializes the transcript
-          // object (which enables the progress bar) and preserves any text from previous chunks.
-          originalPostMessage({
-            status: "update",
-            data: {
-              text: fullText,
-              chunks: allChunks,
-              tps: globalTps,
-              duration: globalDuration,
-              progress: overallProgress
-            }
-          });
-        } else {
-          originalPostMessage(msg);
-        }
-      };
+      // For non-Parakeet (Whisper) models, intercept the update messages to apply
+      // the chunk time offset and merge with accumulated results.
+      if (!isParakeet) {
+        self.postMessage = (msg) => {
+          if (msg.status === "update") {
+            const shiftedChunks = (msg.data.chunks ?? []).map(c => ({
+              ...c,
+              timestamp: [
+                c.timestamp[0] !== null ? c.timestamp[0] + currentTimeOffset : null,
+                c.timestamp[1] !== null ? c.timestamp[1] + currentTimeOffset : null
+              ]
+            }));
+            originalPostMessage({
+              status: "update",
+              data: {
+                text: fullText + (fullText ? " " : "") + msg.data.text,
+                chunks: [...allChunks, ...shiftedChunks],
+                tps: msg.data.tps,
+                duration: globalDuration,
+                progress: ((offset + (msg.data.progress / 100 * audioChunk.length)) / fullAudio.length) * 100
+              }
+            });
+          } else {
+            originalPostMessage(msg);
+          }
+        };
+      }
 
       let chunkResult = await transcribe(chunkMessage).catch(async (error) => {
         if (isParakeet && /device.*lost|gpu.*lost|out.*memory|overflow|invalid.*token/i.test(error?.message ?? String(error))) {
@@ -510,9 +529,9 @@ class AutomaticSpeechRecognitionPipelineFactory extends PipelineFactory {
   static gpu = false;
 }
 
-const transcribe = async ({ audio, formatForCaptions, model, dtype, gpu, subtask, language, duration }) => {
+const transcribe = async ({ audio, formatForCaptions, model, dtype, gpu, subtask, language, duration, chunkOffset, fullAudioLength, accumulatedText, accumulatedChunks, globalDuration, globalTps }) => {
   if (model === "parakeet.wgsl") {
-    return transcribeWithParakeet({ audio, formatForCaptions });
+    return transcribeWithParakeet({ audio, formatForCaptions, chunkOffset, fullAudioLength, accumulatedText, accumulatedChunks, globalDuration, globalTps });
   }
 
   const isDistilWhisper = model.startsWith("distil-whisper/");
