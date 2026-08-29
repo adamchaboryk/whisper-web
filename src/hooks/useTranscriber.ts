@@ -55,6 +55,7 @@ interface TranscriberUpdateData {
     tps: number;
     duration?: number;
     progress?: number;
+    segmentLabel?: string | null;
   };
 }
 
@@ -66,6 +67,7 @@ export interface TranscriberData {
   transcriptionSeconds?: number;
   text: string;
   chunks: { text: string; timestamp: [number, number | null] }[];
+  segmentLabel?: string | null;
 }
 
 export interface SummaryData {
@@ -314,6 +316,7 @@ export function useTranscriber(): Transcriber {
           estimatedRemainingSeconds,
           transcriptionSeconds,
           chunks: updateMessage.data.chunks ?? [],
+          segmentLabel: updateMessage.data.segmentLabel ?? null,
         });
         setIsBusy(busy);
         break;

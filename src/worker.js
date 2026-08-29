@@ -100,7 +100,7 @@ const toCaptionChunks = (chunks) => {
   return captionChunks;
 };
 
-const transcribeWithParakeet = async ({ audio, formatForCaptions, chunkOffset = 0, fullAudioLength = 0, accumulatedText = "", accumulatedChunks = [], globalDuration = 0, globalTps = 0 }) => {
+const transcribeWithParakeet = async ({ audio, formatForCaptions }) => {
   const audioBlob = createCanonicalWav(audio);
   audio = null;
 
@@ -222,50 +222,17 @@ const transcribeWithParakeet = async ({ audio, formatForCaptions, chunkOffset = 
     return chunks;
   };
 
-  const currentTimeOffset = chunkOffset / 16000;
-
   let lastSnapshot = null;
   const result = await parakeetTranscriber.transcribe(audioBlob, {
     sourceName: "audio.wav",
     onPartialResult: (snapshot) => {
       lastSnapshot = snapshot;
-
-      // Use processedAudioSeconds from the snapshot — this is the only reliable
-      // measure of how much audio has actually been decoded (not compute fraction).
-      if (fullAudioLength > 0 && snapshot.processedAudioSeconds > 0) {
-        const processedSamples = chunkOffset + snapshot.processedAudioSeconds * 16000;
-        const overallProgress = (processedSamples / fullAudioLength) * 100;
-
-        // Build live partial chunks shifted by the current chunk offset
-        const liveWords = snapshot.words ?? [];
-        const liveChunks = toChunks(liveWords, formatForCaptions).map(c => ({
-          ...c,
-          timestamp: [
-            c.timestamp[0] !== null ? c.timestamp[0] + currentTimeOffset : null,
-            c.timestamp[1] !== null ? c.timestamp[1] + currentTimeOffset : null
-          ]
-        }));
-
-        const liveText = snapshot.text ?? "";
-
-        self.postMessage({
-          status: "update",
-          data: {
-            text: accumulatedText + (accumulatedText && liveText ? " " : "") + liveText,
-            chunks: [...accumulatedChunks, ...liveChunks],
-            tps: globalTps,
-            duration: globalDuration,
-            progress: Math.min(overallProgress, 99) // cap at 99 until chunk completes
-          }
-        });
-      }
     }
   }).catch(error => {
     // If it crashed but we have a snapshot, return the partial progress.
     if (lastSnapshot && lastSnapshot.processedAudioSeconds > 0) {
       return {
         isPartial: true,
-        error: error,
         text: lastSnapshot.text,
         words: lastSnapshot.words,
         metrics: {
@@ -287,6 +254,7 @@ const transcribeWithParakeet = async ({ audio, formatForCaptions, chunkOffset = 
       })),
     tps: result.metrics.speedFactor,
     duration: result.metrics.audioDurationSeconds,
+
     isPartial: result.isPartial,
     error: result.error
   };
@@ -324,73 +292,83 @@ class PipelineFactory {
 
 self.addEventListener("message", async (event) => {
   const message = event.data;
-
-  const originalPostMessage = self.postMessage;
+  const originalPostMessage = self.postMessage.bind(self);
 
   try {
-    const isParakeet = message.model === "parakeet.wgsl";
-    // Parakeet needs external chunking to avoid "TDT output overflow" errors on
-    // long audio, but the transcriber stays alive between chunks — no
-    // dispose/recreate, so there's no model-reload overhead. If a chunk hits a
-    // device-lost or overflow error, we simply skip that chunk and continue
-    // We no longer manually chunk the audio. Instead, we pass the remaining audio
-    // to the model and let it transcribe natively. If it crashes (e.g. OOM on mobile),
-    // we capture its exact partial progress, dispose it, and resume from the failure point.
     const SAMPLE_RATE = 16000;
+    const isParakeet = message.model === "parakeet.wgsl";
     const fullAudio = message.audio;
     if (!fullAudio) return;
+
+    // On mobile, pre-slice into 3-minute segments to avoid OOM crashes.
+    // On desktop, transcribe everything in one shot.
+    const SEGMENT_DURATION_S = isMobile ? 180 : Infinity;
+    const SEGMENT_SAMPLES = Math.floor(SEGMENT_DURATION_S * SAMPLE_RATE);
+
+    // Pre-build the list of segments. Each is a real copy (slice, not subarray)
+    // so each segment is independent in memory.
+    const segments = [];
+    let segStart = 0;
+    while (segStart < fullAudio.length) {
+      const end = Math.min(segStart + SEGMENT_SAMPLES, fullAudio.length);
+      segments.push({
+        audio: fullAudio.slice(segStart, end),   // real copy — independent memory
+        startSample: segStart,
+      });
+      segStart = end;
+    }
+
+    const totalSegments = segments.length;
+    const globalDuration = message.duration;
 
     let allChunks = [];
     let fullText = "";
     let globalTps = 0;
-    const globalDuration = message.duration;
 
-    let offset = 0;
-    let consecutiveCrashes = 0;
-    const MIN_SKIP_ON_CRASH_S = 30; // skip at least 30s when a partial snapshot gives us 0s
-    const MAX_CONSECUTIVE_CRASHES = 3; // force a bigger skip after 3 crashes at the same spot
+    for (let segIndex = 0; segIndex < totalSegments; segIndex++) {
+      const { audio: segAudio, startSample } = segments[segIndex];
+      const timeOffset = startSample / SAMPLE_RATE;
+      const segmentLabel = totalSegments > 1
+        ? `Segment ${segIndex + 1} of ${totalSegments}`
+        : null;
 
-    while (offset < fullAudio.length) {
-      // Always restore postMessage before setting the new override so we
-      // never accidentally double-wrap it across crash-recovery iterations.
-      self.postMessage = originalPostMessage;
+      // Tell the UI which segment we're starting
+      originalPostMessage({
+        status: "update",
+        data: {
+          text: fullText,
+          chunks: allChunks,
+          tps: globalTps,
+          duration: globalDuration,
+          progress: (startSample / fullAudio.length) * 100,
+          segmentLabel,
+        }
+      });
 
-      const audioChunk = fullAudio.subarray(offset);
-      const currentTimeOffset = offset / SAMPLE_RATE;
-
-      const chunkMessage = {
-        ...message,
-        audio: audioChunk,
-        duration: audioChunk.length / SAMPLE_RATE,
-        // Context for Parakeet's onPartialResult progress (Parakeet only)
-        chunkOffset: offset,
-        fullAudioLength: fullAudio.length,
-        accumulatedText: fullText,
-        accumulatedChunks: allChunks,
-        globalDuration,
-        globalTps,
-      };
-
-      // For non-Parakeet (Whisper) models, intercept the update messages to apply
-      // the chunk time offset and merge with accumulated results.
+      // For Whisper models, intercept update messages to shift timestamps and
+      // merge with already-accumulated text from previous segments.
       if (!isParakeet) {
         self.postMessage = (msg) => {
           if (msg.status === "update") {
             const shiftedChunks = (msg.data.chunks ?? []).map(c => ({
               ...c,
               timestamp: [
-                c.timestamp[0] !== null ? c.timestamp[0] + currentTimeOffset : null,
-                c.timestamp[1] !== null ? c.timestamp[1] + currentTimeOffset : null
+                c.timestamp[0] !== null ? c.timestamp[0] + timeOffset : null,
+                c.timestamp[1] !== null ? c.timestamp[1] + timeOffset : null,
               ]
             }));
+            const segProgress = (msg.data.progress ?? 0) / 100; // 0–1 within this segment
+            const overallProgress =
+              ((startSample + segProgress * segAudio.length) / fullAudio.length) * 100;
             originalPostMessage({
               status: "update",
               data: {
-                text: fullText + (fullText ? " " : "") + msg.data.text,
+                text: fullText + (fullText && msg.data.text ? " " : "") + (msg.data.text ?? ""),
                 chunks: [...allChunks, ...shiftedChunks],
                 tps: msg.data.tps,
                 duration: globalDuration,
-                progress: ((offset + (msg.data.progress / 100 * audioChunk.length)) / fullAudio.length) * 100
+                progress: overallProgress,
+                segmentLabel,
               }
             });
           } else {
@@ -399,88 +377,51 @@ self.addEventListener("message", async (event) => {
         };
       }
 
-      let chunkResult = await transcribe(chunkMessage).catch(async (error) => {
-        if (isParakeet && /device.*lost|gpu.*lost|out.*memory|overflow|invalid.*token/i.test(error?.message ?? String(error))) {
-          console.warn("[whisper-web] WebGPU crashed during native transcription. Attempting to recover from partial snapshot.");
+      const segMessage = {
+        ...message,
+        audio: segAudio,
+        duration: segAudio.length / SAMPLE_RATE,
+      };
 
-          if (parakeetTranscriber) {
-            try { parakeetTranscriber.dispose(); } catch { }
-            parakeetTranscriber = null;
-            originalPostMessage({ status: "recovering" });
-            await new Promise(resolve => setTimeout(resolve, 2500));
-          }
-
-          // If the model crashed IMMEDIATELY (no partial snapshot was saved in transcribeWithParakeet),
-          // we must skip a segment of the "poison" audio to avoid an infinite crash loop.
-          return {
-            text: "",
-            chunks: [],
-            tps: 0,
-            duration: MIN_SKIP_ON_CRASH_S,
-            isCrashWithoutSnapshot: true
-          };
+      let segResult = null;
+      try {
+        segResult = await transcribe(segMessage);
+      } catch (error) {
+        console.error(`[whisper-web] Segment ${segIndex + 1} failed:`, error);
+        // For Parakeet, a crash poisons the model — dispose it before continuing.
+        if (isParakeet && parakeetTranscriber) {
+          try { parakeetTranscriber.dispose(); } catch { }
+          parakeetTranscriber = null;
+          originalPostMessage({ status: "recovering" });
+          await new Promise(resolve => setTimeout(resolve, 2500));
         }
-        throw error;
-      });
-
-      if (!chunkResult) {
-        console.error("[whisper-web] chunkResult is null. Aborting.");
-        self.postMessage = originalPostMessage;
-        return; // Abort on error
+        // Skip this segment and continue with the next one.
+        segResult = null;
       }
 
-      // If transcribeWithParakeet returned a partial result, it means it caught a crash,
-      // saved the progress, but the underlying model is still poisoned. We MUST dispose it.
-      if (chunkResult.isPartial && isParakeet && parakeetTranscriber) {
-        console.warn("[whisper-web] Recovered partial snapshot. Disposing poisoned model.");
-        try { parakeetTranscriber.dispose(); } catch { }
-        parakeetTranscriber = null;
-        originalPostMessage({ status: "recovering" });
-        await new Promise(resolve => setTimeout(resolve, 2500));
+      // Restore postMessage before processing next segment
+      self.postMessage = originalPostMessage;
+
+      if (segResult) {
+        // Shift timestamps from segment-relative to global
+        const shiftedChunks = (segResult.chunks ?? []).map(c => ({
+          ...c,
+          timestamp: [
+            c.timestamp[0] !== null ? c.timestamp[0] + timeOffset : null,
+            c.timestamp[1] !== null ? c.timestamp[1] + timeOffset : null,
+          ]
+        }));
+        allChunks = [...allChunks, ...shiftedChunks];
+        fullText = fullText
+          ? (segResult.text ? fullText + " " + segResult.text : fullText)
+          : (segResult.text ?? "");
+        if (segResult.tps > 0) globalTps = segResult.tps;
       }
 
-      // Format the chunks from this iteration
-      const shiftedChunks = chunkResult.chunks.map(c => ({
-        ...c,
-        timestamp: [
-          c.timestamp[0] !== null ? c.timestamp[0] + currentTimeOffset : null,
-          c.timestamp[1] !== null ? c.timestamp[1] + currentTimeOffset : null
-        ]
-      }));
+      const endSample = startSample + segAudio.length;
+      const progressAfterSeg = (endSample / fullAudio.length) * 100;
 
-      allChunks.push(...shiftedChunks);
-      fullText += (fullText ? " " : "") + chunkResult.text;
-      if (chunkResult.tps > 0) globalTps = chunkResult.tps;
-
-      // Determine exactly how much audio was successfully processed.
-      // Guard against processedAudioSeconds=0 which would create a 1-sample infinite loop.
-      let processedSeconds = chunkResult.duration;
-
-      const isCrash = chunkResult.isPartial || chunkResult.isCrashWithoutSnapshot;
-      if (isCrash) {
-        consecutiveCrashes++;
-        // Enforce a meaningful minimum skip so we never get stuck at the same offset.
-        // After MAX_CONSECUTIVE_CRASHES at the same spot, jump a larger amount.
-        const minSkip = consecutiveCrashes >= MAX_CONSECUTIVE_CRASHES
-          ? MIN_SKIP_ON_CRASH_S * 2
-          : MIN_SKIP_ON_CRASH_S;
-        if (processedSeconds < minSkip) {
-          console.warn(`[whisper-web] processedSeconds=${processedSeconds.toFixed(1)}s is too small after crash. Forcing skip to ${minSkip}s.`);
-          processedSeconds = minSkip;
-        }
-      } else {
-        consecutiveCrashes = 0; // reset on a successful transcription
-      }
-
-      console.log(`[whisper-web] Chunk finished. Processed: ${processedSeconds.toFixed(1)}s | offset: ${offset} | total: ${fullAudio.length} | crashes: ${consecutiveCrashes}`);
-
-      // Advance the offset to resume precisely where we left off
-      const advanceSamples = Math.floor(processedSeconds * SAMPLE_RATE);
-      offset += advanceSamples;
-
-      console.log(`[whisper-web] New offset: ${offset} (${(offset / fullAudio.length * 100).toFixed(2)}%)`);
-
-      // Push the final text of this chunk to the UI immediately
+      // Send the confirmed result for this segment to the UI
       originalPostMessage({
         status: "update",
         data: {
@@ -488,39 +429,38 @@ self.addEventListener("message", async (event) => {
           chunks: allChunks,
           tps: globalTps,
           duration: globalDuration,
-          progress: Math.min(100, (offset / fullAudio.length) * 100)
+          progress: Math.min(progressAfterSeg, segIndex === totalSegments - 1 ? 100 : 99),
+          segmentLabel: segIndex < totalSegments - 1
+            ? `Segment ${segIndex + 1} of ${totalSegments} done. Starting segment ${segIndex + 2}...`
+            : null,
         }
       });
 
-      if (offset < fullAudio.length) {
-        await new Promise(resolve => setTimeout(resolve, 500));
-      } else {
-        console.log("[whisper-web] Loop finished normally.");
+      // Wait 2 seconds between segments to let the device breathe
+      if (segIndex < totalSegments - 1) {
+        await new Promise(resolve => setTimeout(resolve, 2000));
       }
     }
 
-    self.postMessage = originalPostMessage;
-
-    self.postMessage({
+    originalPostMessage({
       status: "complete",
       data: {
         text: fullText,
         chunks: allChunks,
         tps: globalTps,
-        duration: globalDuration
+        duration: globalDuration,
       },
     });
   } catch (error) {
     console.error(error);
-    if (self.postMessage !== originalPostMessage) {
-      self.postMessage = originalPostMessage;
-    }
-    self.postMessage({
+    self.postMessage = originalPostMessage;
+    originalPostMessage({
       status: "error",
       data: { message: error?.message ?? String(error) },
     });
   }
 });
+
 
 class AutomaticSpeechRecognitionPipelineFactory extends PipelineFactory {
   static task = "automatic-speech-recognition";
@@ -529,9 +469,9 @@ class AutomaticSpeechRecognitionPipelineFactory extends PipelineFactory {
   static gpu = false;
 }
 
-const transcribe = async ({ audio, formatForCaptions, model, dtype, gpu, subtask, language, duration, chunkOffset, fullAudioLength, accumulatedText, accumulatedChunks, globalDuration, globalTps }) => {
+const transcribe = async ({ audio, formatForCaptions, model, dtype, gpu, subtask, language, duration }) => {
   if (model === "parakeet.wgsl") {
-    return transcribeWithParakeet({ audio, formatForCaptions, chunkOffset, fullAudioLength, accumulatedText, accumulatedChunks, globalDuration, globalTps });
+    return transcribeWithParakeet({ audio, formatForCaptions });
   }
 
   const isDistilWhisper = model.startsWith("distil-whisper/");

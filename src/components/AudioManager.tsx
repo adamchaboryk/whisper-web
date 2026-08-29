@@ -423,7 +423,7 @@ export function AudioManager(props: {
             onSeekReady={props.onSeekReady}
           />
 
-          <div className='relative w-full flex flex-col justify-center items-center mt-2 gap-3'>
+          <div className='relative w-full flex flex-col justify-center items-center mt-2 gap-2'>
             {(!props.transcriber.output || props.transcriber.isBusy || isTranscriptLengthMismatched) && (
               <TranscribeButton
                 ref={transcribeButtonRef}
@@ -435,9 +435,11 @@ export function AudioManager(props: {
               />
             )}
 
-            {props.transcriber.isRecovering && (
-              <div className="text-sm font-medium text-amber-600 dark:text-amber-400 animate-pulse text-center">
-                Device limit reached. Recovering and resuming...
+            {props.transcriber.isBusy && (props.transcriber.output?.segmentLabel || props.transcriber.isRecovering) && (
+              <div className="text-sm font-medium text-amber-600 dark:text-amber-400 animate-pulse text-center px-4">
+                {props.transcriber.isRecovering
+                  ? "Device limit reached. Recovering and resuming..."
+                  : props.transcriber.output?.segmentLabel}
               </div>
             )}
           </div>
