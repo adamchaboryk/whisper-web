@@ -348,7 +348,7 @@ self.addEventListener("message", async (event) => {
         }
       };
 
-      let chunkResult = await transcribe(chunkMessage).catch(error => {
+      let chunkResult = await transcribe(chunkMessage).catch(async (error) => {
         // On mobile, WebGPU device-lost errors or TDT output overflows are common.
         // Fall back to Whisper tiny (WASM) for the current chunk rather than aborting.
         if (isParakeet && /device.*lost|gpu.*lost|out.*memory|overflow/i.test(error?.message ?? String(error))) {
@@ -360,6 +360,9 @@ self.addEventListener("message", async (event) => {
           if (parakeetTranscriber) {
             try { parakeetTranscriber.dispose(); } catch { /* already dead */ }
             parakeetTranscriber = null;
+            // Wait a few seconds to ensure the mobile GPU and garbage collector
+            // actually free the VRAM before the next chunk tries to recreate the model.
+            await new Promise(resolve => setTimeout(resolve, 2500));
           }
 
           // Return an empty result to skip this chunk without crashing the whole transcription
