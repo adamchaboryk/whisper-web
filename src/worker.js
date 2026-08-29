@@ -222,6 +222,7 @@ const transcribeWithParakeet = async ({ audio, formatForCaptions }) => {
     return chunks;
   };
 
+  let lastSnapshot = null;
   const result = await parakeetTranscriber.transcribe(audioBlob, {
     sourceName: "audio.wav",
     onProgress: ({ fraction }) => {
@@ -232,6 +233,24 @@ const transcribeWithParakeet = async ({ audio, formatForCaptions }) => {
         },
       });
     },
+    onPartialResult: (snapshot) => {
+      lastSnapshot = snapshot;
+    }
+  }).catch(error => {
+    // If it crashed but we have a snapshot, return the partial progress.
+    if (lastSnapshot && lastSnapshot.processedAudioSeconds > 0) {
+      return {
+        isPartial: true,
+        error: error,
+        text: lastSnapshot.text,
+        words: lastSnapshot.words,
+        metrics: {
+          speedFactor: 0,
+          audioDurationSeconds: lastSnapshot.processedAudioSeconds
+        }
+      };
+    }
+    throw error;
   });
 
   return {
@@ -244,6 +263,8 @@ const transcribeWithParakeet = async ({ audio, formatForCaptions }) => {
       })),
     tps: result.metrics.speedFactor,
     duration: result.metrics.audioDurationSeconds,
+    isPartial: result.isPartial,
+    error: result.error
   };
 };
 
@@ -287,13 +308,10 @@ self.addEventListener("message", async (event) => {
     // long audio, but the transcriber stays alive between chunks — no
     // dispose/recreate, so there's no model-reload overhead. If a chunk hits a
     // device-lost or overflow error, we simply skip that chunk and continue
-    // Chunking is only necessary on mobile to prevent WebGPU OOM crashes.
-    // Desktop devices have enough VRAM to handle the full audio via the libraries'
-    // internal windowing systems, so we pass the entire audio at once.
-    const CHUNK_DURATION_S = isMobile ? 2 * 60 : Infinity;
+    // We no longer manually chunk the audio. Instead, we pass the remaining audio
+    // to the model and let it transcribe natively. If it crashes (e.g. OOM on mobile),
+    // we capture its exact partial progress, dispose it, and resume from the failure point.
     const SAMPLE_RATE = 16000;
-    const SAMPLES_PER_CHUNK = CHUNK_DURATION_S * SAMPLE_RATE;
-
     const fullAudio = message.audio;
     if (!fullAudio) return;
 
@@ -302,13 +320,11 @@ self.addEventListener("message", async (event) => {
     let globalTps = 0;
     const globalDuration = message.duration;
 
-    let currentTimeOffset = 0;
-    let currentOffset = 0;
+    let offset = 0;
 
-    for (let offset = 0; offset < fullAudio.length; offset += SAMPLES_PER_CHUNK) {
-      const audioChunk = fullAudio.subarray(offset, offset + SAMPLES_PER_CHUNK);
-      currentTimeOffset = offset / SAMPLE_RATE;
-      currentOffset = offset;
+    while (offset < fullAudio.length) {
+      const audioChunk = fullAudio.subarray(offset);
+      const currentTimeOffset = offset / SAMPLE_RATE;
 
       const chunkMessage = {
         ...message,
@@ -333,7 +349,7 @@ self.addEventListener("message", async (event) => {
               chunks: [...allChunks, ...shiftedChunks],
               tps: msg.data.tps,
               duration: globalDuration,
-              progress: ((offset + audioChunk.length) / fullAudio.length) * 100
+              progress: ((offset + (msg.data.progress / 100 * audioChunk.length)) / fullAudio.length) * 100
             }
           });
         } else if (msg.status === "transcription_progress") {
@@ -349,28 +365,23 @@ self.addEventListener("message", async (event) => {
       };
 
       let chunkResult = await transcribe(chunkMessage).catch(async (error) => {
-        // On mobile, WebGPU device-lost errors or TDT output overflows are common.
-        // Fall back to Whisper tiny (WASM) for the current chunk rather than aborting.
         if (isParakeet && /device.*lost|gpu.*lost|out.*memory|overflow/i.test(error?.message ?? String(error))) {
-          const isOverflow = /overflow/i.test(error?.message ?? String(error));
-          console.warn(`[whisper-web] WebGPU error (${isOverflow ? "overflow" : "device lost"}) during parakeet transcription. Skipping this chunk.`);
+          console.warn("[whisper-web] WebGPU crashed during native transcription. Attempting to recover from partial snapshot.");
 
-          // Only dispose the transcriber if it's a hard crash (device lost/OOM).
-          // If it's just an overflow (inference failure on a specific chunk), we can keep the model loaded.
           if (parakeetTranscriber) {
-            try { parakeetTranscriber.dispose(); } catch { /* already dead */ }
+            try { parakeetTranscriber.dispose(); } catch { }
             parakeetTranscriber = null;
-            // Wait a few seconds to ensure the mobile GPU and garbage collector
-            // actually free the VRAM before the next chunk tries to recreate the model.
             await new Promise(resolve => setTimeout(resolve, 2500));
           }
 
-          // Return an empty result to skip this chunk without crashing the whole transcription
+          // If the model crashed IMMEDIATELY (no partial snapshot was saved in transcribeWithParakeet),
+          // we must skip a small segment of the "poison" audio (e.g. 15 seconds) to avoid an infinite crash loop.
           return {
             text: "",
             chunks: [],
             tps: 0,
-            duration: chunkMessage.duration
+            duration: 15,
+            isCrashWithoutSnapshot: true
           };
         }
         throw error;
@@ -381,6 +392,7 @@ self.addEventListener("message", async (event) => {
         return; // Abort on error
       }
 
+      // Format the chunks from this iteration
       const shiftedChunks = chunkResult.chunks.map(c => ({
         ...c,
         timestamp: [
@@ -391,9 +403,18 @@ self.addEventListener("message", async (event) => {
 
       allChunks.push(...shiftedChunks);
       fullText += (fullText ? " " : "") + chunkResult.text;
-      globalTps = chunkResult.tps; // keep last chunk's TPS
+      if (chunkResult.tps > 0) globalTps = chunkResult.tps;
 
-      if (offset + SAMPLES_PER_CHUNK < fullAudio.length) {
+      // Determine exactly how much audio was successfully processed before the crash (or completion)
+      let processedSeconds = chunkResult.duration;
+      if (chunkResult.isCrashWithoutSnapshot) {
+        processedSeconds = 15; // Skip 15s to bypass the poison pill
+      }
+
+      // Advance the offset to resume precisely where we left off
+      offset += Math.max(1, Math.floor(processedSeconds * SAMPLE_RATE));
+
+      if (offset < fullAudio.length) {
         await new Promise(resolve => setTimeout(resolve, 500));
       }
     }
