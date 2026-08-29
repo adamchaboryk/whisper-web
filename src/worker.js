@@ -355,9 +355,18 @@ self.addEventListener("message", async (event) => {
         } else if (msg.status === "transcription_progress") {
           const chunkProgress = msg.data.progress;
           const overallProgress = ((offset / fullAudio.length) * 100) + (chunkProgress * (audioChunk.length / fullAudio.length));
+
+          // Send as "update" instead of "transcription_progress" so the UI initializes the transcript
+          // object (which enables the progress bar) and preserves any text from previous chunks.
           originalPostMessage({
-            status: "transcription_progress",
-            data: { progress: overallProgress }
+            status: "update",
+            data: {
+              text: fullText,
+              chunks: allChunks,
+              tps: globalTps,
+              duration: globalDuration,
+              progress: overallProgress
+            }
           });
         } else {
           originalPostMessage(msg);
@@ -422,6 +431,18 @@ self.addEventListener("message", async (event) => {
 
       // Advance the offset to resume precisely where we left off
       offset += Math.max(1, Math.floor(processedSeconds * SAMPLE_RATE));
+
+      // Push the final text of this chunk to the UI immediately
+      originalPostMessage({
+        status: "update",
+        data: {
+          text: fullText,
+          chunks: allChunks,
+          tps: globalTps,
+          duration: globalDuration,
+          progress: (offset / fullAudio.length) * 100
+        }
+      });
 
       if (offset < fullAudio.length) {
         await new Promise(resolve => setTimeout(resolve, 500));
