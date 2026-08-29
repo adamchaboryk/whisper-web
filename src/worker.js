@@ -3,6 +3,10 @@ import { createTranscriber } from "parakeet.wgsl";
 
 let parakeetTranscriber = null;
 
+const isMobile =
+  typeof navigator !== "undefined" &&
+  /Mobi|Android|iPhone|iPad/i.test(navigator.userAgent);
+
 const createCanonicalWav = (audio, sampleRate = 16000) => {
   const bytesPerSample = 2;
   const dataLength = audio.length * bytesPerSample;
@@ -283,8 +287,10 @@ self.addEventListener("message", async (event) => {
     // long audio, but the transcriber stays alive between chunks — no
     // dispose/recreate, so there's no model-reload overhead. If a chunk hits a
     // device-lost or overflow error, we simply skip that chunk and continue
-    // We use a universal 5-minute chunk duration to keep memory usage low across all models.
-    const CHUNK_DURATION_S = 5 * 60;
+    // Chunking is only necessary on mobile to prevent WebGPU OOM crashes.
+    // Desktop devices have enough VRAM to handle the full audio via the libraries'
+    // internal windowing systems, so we pass the entire audio at once.
+    const CHUNK_DURATION_S = isMobile ? 2 * 60 : Infinity;
     const SAMPLE_RATE = 16000;
     const SAMPLES_PER_CHUNK = CHUNK_DURATION_S * SAMPLE_RATE;
 
