@@ -321,8 +321,15 @@ self.addEventListener("message", async (event) => {
     const globalDuration = message.duration;
 
     let offset = 0;
+    let consecutiveCrashes = 0;
+    const MIN_SKIP_ON_CRASH_S = 30; // skip at least 30s when a partial snapshot gives us 0s
+    const MAX_CONSECUTIVE_CRASHES = 3; // force a bigger skip after 3 crashes at the same spot
 
     while (offset < fullAudio.length) {
+      // Always restore postMessage before setting the new override so we
+      // never accidentally double-wrap it across crash-recovery iterations.
+      self.postMessage = originalPostMessage;
+
       const audioChunk = fullAudio.subarray(offset);
       const currentTimeOffset = offset / SAMPLE_RATE;
 
@@ -380,16 +387,17 @@ self.addEventListener("message", async (event) => {
           if (parakeetTranscriber) {
             try { parakeetTranscriber.dispose(); } catch { }
             parakeetTranscriber = null;
+            originalPostMessage({ status: "recovering" });
             await new Promise(resolve => setTimeout(resolve, 2500));
           }
 
           // If the model crashed IMMEDIATELY (no partial snapshot was saved in transcribeWithParakeet),
-          // we must skip a small segment of the "poison" audio (e.g. 15 seconds) to avoid an infinite crash loop.
+          // we must skip a segment of the "poison" audio to avoid an infinite crash loop.
           return {
             text: "",
             chunks: [],
             tps: 0,
-            duration: 15,
+            duration: MIN_SKIP_ON_CRASH_S,
             isCrashWithoutSnapshot: true
           };
         }
@@ -397,6 +405,7 @@ self.addEventListener("message", async (event) => {
       });
 
       if (!chunkResult) {
+        console.error("[whisper-web] chunkResult is null. Aborting.");
         self.postMessage = originalPostMessage;
         return; // Abort on error
       }
@@ -407,6 +416,7 @@ self.addEventListener("message", async (event) => {
         console.warn("[whisper-web] Recovered partial snapshot. Disposing poisoned model.");
         try { parakeetTranscriber.dispose(); } catch { }
         parakeetTranscriber = null;
+        originalPostMessage({ status: "recovering" });
         await new Promise(resolve => setTimeout(resolve, 2500));
       }
 
@@ -423,14 +433,33 @@ self.addEventListener("message", async (event) => {
       fullText += (fullText ? " " : "") + chunkResult.text;
       if (chunkResult.tps > 0) globalTps = chunkResult.tps;
 
-      // Determine exactly how much audio was successfully processed before the crash (or completion)
+      // Determine exactly how much audio was successfully processed.
+      // Guard against processedAudioSeconds=0 which would create a 1-sample infinite loop.
       let processedSeconds = chunkResult.duration;
-      if (chunkResult.isCrashWithoutSnapshot) {
-        processedSeconds = 15; // Skip 15s to bypass the poison pill
+
+      const isCrash = chunkResult.isPartial || chunkResult.isCrashWithoutSnapshot;
+      if (isCrash) {
+        consecutiveCrashes++;
+        // Enforce a meaningful minimum skip so we never get stuck at the same offset.
+        // After MAX_CONSECUTIVE_CRASHES at the same spot, jump a larger amount.
+        const minSkip = consecutiveCrashes >= MAX_CONSECUTIVE_CRASHES
+          ? MIN_SKIP_ON_CRASH_S * 2
+          : MIN_SKIP_ON_CRASH_S;
+        if (processedSeconds < minSkip) {
+          console.warn(`[whisper-web] processedSeconds=${processedSeconds.toFixed(1)}s is too small after crash. Forcing skip to ${minSkip}s.`);
+          processedSeconds = minSkip;
+        }
+      } else {
+        consecutiveCrashes = 0; // reset on a successful transcription
       }
 
+      console.log(`[whisper-web] Chunk finished. Processed: ${processedSeconds.toFixed(1)}s | offset: ${offset} | total: ${fullAudio.length} | crashes: ${consecutiveCrashes}`);
+
       // Advance the offset to resume precisely where we left off
-      offset += Math.max(1, Math.floor(processedSeconds * SAMPLE_RATE));
+      const advanceSamples = Math.floor(processedSeconds * SAMPLE_RATE);
+      offset += advanceSamples;
+
+      console.log(`[whisper-web] New offset: ${offset} (${(offset / fullAudio.length * 100).toFixed(2)}%)`);
 
       // Push the final text of this chunk to the UI immediately
       originalPostMessage({
@@ -440,12 +469,14 @@ self.addEventListener("message", async (event) => {
           chunks: allChunks,
           tps: globalTps,
           duration: globalDuration,
-          progress: (offset / fullAudio.length) * 100
+          progress: Math.min(100, (offset / fullAudio.length) * 100)
         }
       });
 
       if (offset < fullAudio.length) {
         await new Promise(resolve => setTimeout(resolve, 500));
+      } else {
+        console.log("[whisper-web] Loop finished normally.");
       }
     }
 

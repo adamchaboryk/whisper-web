@@ -222,6 +222,7 @@ export interface Transcriber {
   summary?: SummaryData;
   summarize: (text: string) => void;
   setTranscript: (data: TranscriberData | undefined) => void;
+  isRecovering: boolean;
 }
 
 export function useTranscriber(): Transcriber {
@@ -230,6 +231,7 @@ export function useTranscriber(): Transcriber {
   );
   const [isBusy, setIsBusy] = useState(false);
   const [isModelLoading, setIsModelLoading] = useState(false);
+  const [isRecovering, setIsRecovering] = useState(false);
   const [summary, setSummary] = useState<SummaryData | undefined>(undefined);
   const jobStartRef = useRef<number | null>(null);
   // Tracks when actual transcription work begins, separate from model load time.
@@ -270,7 +272,11 @@ export function useTranscriber(): Transcriber {
           }),
         );
         break;
+      case "recovering":
+        setIsRecovering(true);
+        break;
       case "transcription_progress":
+        setIsRecovering(false);
         setTranscript((prev) =>
           prev
             ? { ...prev, isBusy: true, progress: message.data.progress }
@@ -280,6 +286,7 @@ export function useTranscriber(): Transcriber {
         break;
       case "update":
       case "complete": {
+        setIsRecovering(false);
         const busy = message.status === "update";
         const updateMessage = message as TranscriberUpdateData;
         const duration = updateMessage.data.duration ?? 0;
@@ -313,8 +320,15 @@ export function useTranscriber(): Transcriber {
       }
       case "initiate":
         // Model file start load: add a new progress item to the list.
-        setIsModelLoading(true);
-        isModelLoadingRef.current = true;
+        // Only trigger the full-screen "Loading model" UI if we haven't started transcribing yet.
+        // If we are recovering from a crash mid-transcription, do this silently.
+        setTranscript((prev) => {
+          if (!prev) {
+            setIsModelLoading(true);
+            isModelLoadingRef.current = true;
+          }
+          return prev;
+        });
         setProgressItems((prev) => [...prev, message]);
         break;
       case "ready":
@@ -429,6 +443,7 @@ export function useTranscriber(): Transcriber {
 
         setTranscript(undefined);
         setIsBusy(true);
+        setIsRecovering(false);
         setTranscript({
           isBusy: true,
           text: "",
@@ -634,11 +649,13 @@ export function useTranscriber(): Transcriber {
       summary,
       summarize: summarizeRequest,
       setTranscript,
+      isRecovering,
     };
   }, [
     onInputChange,
     isBusy,
     isModelLoading,
+    isRecovering,
     supportsSummarizer,
     progressItems,
     postRequest,
