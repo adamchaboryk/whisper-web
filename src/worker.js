@@ -281,9 +281,10 @@ self.addEventListener("message", async (event) => {
     const fullAudio = message.audio;
     if (!fullAudio) return;
 
-    // On mobile, pre-slice into 30-second segments to avoid OOM/overflow crashes.
+    // On mobile, pre-slice into 2-minute (120s) segments to avoid OOM/overflow crashes.
+    // This ensures audio under 2 minutes is transcribed in a single pass.
     // On desktop, transcribe everything in one shot.
-    const SEGMENT_DURATION_S = isMobile ? 30 : Infinity;
+    const SEGMENT_DURATION_S = isMobile ? 120 : Infinity;
     // Guard against Infinity * SAMPLE_RATE producing Infinity — use fullAudio.length as fallback.
     const SEGMENT_SAMPLES = isFinite(SEGMENT_DURATION_S)
       ? Math.floor(SEGMENT_DURATION_S * SAMPLE_RATE)
