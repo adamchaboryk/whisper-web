@@ -131,7 +131,7 @@ const isMobileOrTablet = mobileTabletCheck();
 
 export const MODELS: { [key: string]: [string, string] } = {
   "parakeet.wgsl": ["NVIDIA Parakeet (Fast & Accurate)", "en"],
-  ...(isMobileOrTablet ? { "onnx-community/whisper-tiny": ["Whisper Tiny (Mobile)", ""] } : {}),
+  ...(isMobileOrTablet ? { "onnx-community/whisper-tiny": ["Whisper Tiny (Fastest)", ""] } : {}),
   "onnx-community/whisper-base": ["Whisper Base (Fast & Light)", ""],
   "onnx-community/whisper-small": ["Whisper Small (Balanced)", ""],
   "onnx-community/whisper-large-v3-turbo": ["Whisper Large (Slower, but Best Quality)", ""],

@@ -282,9 +282,9 @@ self.addEventListener("message", async (event) => {
     // Parakeet needs external chunking to avoid "TDT output overflow" errors on
     // long audio, but the transcriber stays alive between chunks — no
     // dispose/recreate, so there's no model-reload overhead. If a chunk hits a
-    // device-lost error (common on mobile), the error handler falls back to
-    // Whisper for that chunk and the next chunk re-creates the transcriber.
-    const CHUNK_DURATION_S = isParakeet ? 2 * 60 : 10 * 60;
+    // device-lost or overflow error, we simply skip that chunk and continue
+    // We use a universal 5-minute chunk duration to keep memory usage low across all models.
+    const CHUNK_DURATION_S = 5 * 60;
     const SAMPLE_RATE = 16000;
     const SAMPLES_PER_CHUNK = CHUNK_DURATION_S * SAMPLE_RATE;
 
@@ -347,7 +347,7 @@ self.addEventListener("message", async (event) => {
         // Fall back to Whisper tiny (WASM) for the current chunk rather than aborting.
         if (isParakeet && /device.*lost|gpu.*lost|out.*memory|overflow/i.test(error?.message ?? String(error))) {
           const isOverflow = /overflow/i.test(error?.message ?? String(error));
-          console.warn(`[whisper-web] WebGPU error (${isOverflow ? "overflow" : "device lost"}) during parakeet transcription, falling back to Whisper tiny for this chunk`);
+          console.warn(`[whisper-web] WebGPU error (${isOverflow ? "overflow" : "device lost"}) during parakeet transcription. Skipping this chunk.`);
 
           // Only dispose the transcriber if it's a hard crash (device lost/OOM).
           // If it's just an overflow (inference failure on a specific chunk), we can keep the model loaded.
@@ -355,12 +355,14 @@ self.addEventListener("message", async (event) => {
             try { parakeetTranscriber.dispose(); } catch { /* already dead */ }
             parakeetTranscriber = null;
           }
-          return transcribe({
-            ...chunkMessage,
-            model: "onnx-community/whisper-tiny",
-            dtype: "q8",
-            gpu: false,
-          });
+
+          // Return an empty result to skip this chunk without crashing the whole transcription
+          return {
+            text: "",
+            chunks: [],
+            tps: 0,
+            duration: chunkMessage.duration
+          };
         }
         throw error;
       });
