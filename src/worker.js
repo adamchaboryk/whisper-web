@@ -303,30 +303,27 @@ self.addEventListener("message", async (event) => {
     // On mobile, pre-slice into 3-minute segments to avoid OOM crashes.
     // On desktop, transcribe everything in one shot.
     const SEGMENT_DURATION_S = isMobile ? 180 : Infinity;
-    const SEGMENT_SAMPLES = Math.floor(SEGMENT_DURATION_S * SAMPLE_RATE);
+    // Guard against Infinity * SAMPLE_RATE producing Infinity — use fullAudio.length as fallback.
+    const SEGMENT_SAMPLES = isFinite(SEGMENT_DURATION_S)
+      ? Math.floor(SEGMENT_DURATION_S * SAMPLE_RATE)
+      : fullAudio.length;
 
-    // Pre-build the list of segments. Each is a real copy (slice, not subarray)
-    // so each segment is independent in memory.
-    const segments = [];
-    let segStart = 0;
-    while (segStart < fullAudio.length) {
-      const end = Math.min(segStart + SEGMENT_SAMPLES, fullAudio.length);
-      segments.push({
-        audio: fullAudio.slice(segStart, end),   // real copy — independent memory
-        startSample: segStart,
-      });
-      segStart = end;
-    }
-
-    const totalSegments = segments.length;
+    // Compute total number of segments upfront (for the "Segment X of Y" label)
+    // but create each segment view lazily to avoid holding multiple large buffers.
+    const totalSegments = Math.max(1, Math.ceil(fullAudio.length / SEGMENT_SAMPLES));
     const globalDuration = message.duration;
+
 
     let allChunks = [];
     let fullText = "";
     let globalTps = 0;
 
     for (let segIndex = 0; segIndex < totalSegments; segIndex++) {
-      const { audio: segAudio, startSample } = segments[segIndex];
+      const startSample = segIndex * SEGMENT_SAMPLES;
+      const endSample = Math.min(startSample + SEGMENT_SAMPLES, fullAudio.length);
+      // Use subarray — zero-copy view into the original buffer, no extra memory.
+      // createCanonicalWav converts float32→int16 immediately, so the view is safe.
+      const segAudio = fullAudio.subarray(startSample, endSample);
       const timeOffset = startSample / SAMPLE_RATE;
       const segmentLabel = totalSegments > 1
         ? `Segment ${segIndex + 1} of ${totalSegments}`
@@ -418,7 +415,6 @@ self.addEventListener("message", async (event) => {
         if (segResult.tps > 0) globalTps = segResult.tps;
       }
 
-      const endSample = startSample + segAudio.length;
       const progressAfterSeg = (endSample / fullAudio.length) * 100;
 
       // Send the confirmed result for this segment to the UI

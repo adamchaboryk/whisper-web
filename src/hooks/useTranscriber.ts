@@ -322,11 +322,12 @@ export function useTranscriber(): Transcriber {
         break;
       }
       case "initiate":
-        // Model file start load: add a new progress item to the list.
-        // Only trigger the full-screen "Loading model" UI if we haven't started transcribing yet.
-        // If we are recovering from a crash mid-transcription, do this silently.
+        // Show loading UI on initial model load (no text transcribed yet).
+        // Suppress it if we already have transcribed text — that means Parakeet
+        // is silently reloading between segments after a crash.
         setTranscript((prev) => {
-          if (!prev) {
+          const hasText = prev && prev.text;
+          if (!hasText) {
             setIsModelLoading(true);
             isModelLoadingRef.current = true;
           }
