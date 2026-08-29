@@ -357,7 +357,7 @@ self.addEventListener("message", async (event) => {
 
           // Only dispose the transcriber if it's a hard crash (device lost/OOM).
           // If it's just an overflow (inference failure on a specific chunk), we can keep the model loaded.
-          if (!isOverflow && parakeetTranscriber) {
+          if (parakeetTranscriber) {
             try { parakeetTranscriber.dispose(); } catch { /* already dead */ }
             parakeetTranscriber = null;
           }
