@@ -147,13 +147,13 @@ export function AudioManager(props: {
   // Combine all in-flight model file downloads into a single byte-weighted percentage.
   const isTranscriptLengthMismatched = useMemo(() => {
     if (!props.transcriptChunks?.length || !audioData?.buffer?.duration) return false;
-
+    
     const lastChunk = props.transcriptChunks[props.transcriptChunks.length - 1];
     const transcriptDuration = lastChunk.timestamp[1] ?? lastChunk.timestamp[0] ?? 0;
     const audioDuration = audioData.buffer.duration;
-
+    
     const diff = Math.abs(transcriptDuration - audioDuration);
-    // Consider significantly different if the difference is more than 10% of the audio duration
+    // Consider significantly different if the difference is more than 10% of the audio duration 
     // AND at least 10 seconds.
     return diff > Math.max(10, audioDuration * 0.1);
   }, [props.transcriptChunks, audioData]);
@@ -423,7 +423,7 @@ export function AudioManager(props: {
             onSeekReady={props.onSeekReady}
           />
 
-          <div className='relative w-full flex flex-col justify-center items-center mt-2 gap-2'>
+          <div className='relative w-full flex justify-center items-center mt-2 gap-3'>
             {(!props.transcriber.output || props.transcriber.isBusy || isTranscriptLengthMismatched) && (
               <TranscribeButton
                 ref={transcribeButtonRef}
@@ -433,14 +433,6 @@ export function AudioManager(props: {
                 isTranscribing={props.transcriber.isBusy}
                 transcribingProgress={props.transcriber.output?.progress}
               />
-            )}
-
-            {props.transcriber.isBusy && (props.transcriber.output?.segmentLabel || props.transcriber.isRecovering) && (
-              <div className="text-sm font-medium text-amber-600 dark:text-amber-400 animate-pulse text-center px-4">
-                {props.transcriber.isRecovering
-                  ? "Device limit reached. Recovering and resuming..."
-                  : props.transcriber.output?.segmentLabel}
-              </div>
             )}
           </div>
         </>
