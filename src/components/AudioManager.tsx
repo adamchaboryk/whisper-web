@@ -145,6 +145,19 @@ export function AudioManager(props: {
   }, [startTranscription]);
 
   // Combine all in-flight model file downloads into a single byte-weighted percentage.
+  const isTranscriptLengthMismatched = useMemo(() => {
+    if (!props.transcriptChunks?.length || !audioData?.buffer?.duration) return false;
+    
+    const lastChunk = props.transcriptChunks[props.transcriptChunks.length - 1];
+    const transcriptDuration = lastChunk.timestamp[1] ?? lastChunk.timestamp[0] ?? 0;
+    const audioDuration = audioData.buffer.duration;
+    
+    const diff = Math.abs(transcriptDuration - audioDuration);
+    // Consider significantly different if the difference is more than 10% of the audio duration 
+    // AND at least 10 seconds.
+    return diff > Math.max(10, audioDuration * 0.1);
+  }, [props.transcriptChunks, audioData]);
+
   const overallModelLoadProgress = useMemo(() => {
     const items = props.transcriber.progressItems;
     if (items.length === 0) {
@@ -411,7 +424,7 @@ export function AudioManager(props: {
           />
 
           <div className='relative w-full flex justify-center items-center mt-2 gap-3'>
-            {(!props.transcriber.output || props.transcriber.isBusy) && (
+            {(!props.transcriber.output || props.transcriber.isBusy || isTranscriptLengthMismatched) && (
               <TranscribeButton
                 ref={transcribeButtonRef}
                 onClick={handleTranscribeClick}
