@@ -112,13 +112,16 @@ const transcribeWithParakeet = async ({ audio, formatForCaptions, signal }) => {
 
     parakeetTranscriber = createTranscriber({
       onLoadProgress: ({ phase, fraction, loadedBytes, totalBytes }) => {
-        self.postMessage({
+        const payload = {
           status: phase === "ready" ? "ready" : "progress",
           file: "parakeet.wgsl",
-          loaded: loadedBytes ?? 0,
-          total: totalBytes ?? 0,
           progress: fraction * 100,
-        });
+          phase: phase,
+        };
+        if (loadedBytes !== undefined) payload.loaded = loadedBytes;
+        if (totalBytes !== undefined) payload.total = totalBytes;
+
+        self.postMessage(payload);
         if (phase === "ready") {
           self.postMessage({ status: "done", file: "parakeet.wgsl" });
         }

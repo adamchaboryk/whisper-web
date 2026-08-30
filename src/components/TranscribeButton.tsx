@@ -10,6 +10,7 @@ interface Props extends React.ButtonHTMLAttributes<HTMLButtonElement> {
 export const TranscribeButton = React.forwardRef<HTMLButtonElement, Props>(
   function TranscribeButton(props: Props, ref) {
     const { isModelLoading, isTranscribing, modelLoadingProgress, transcribingProgress, onClick, ...buttonProps } = props;
+
     return (
       <button
         {...buttonProps}

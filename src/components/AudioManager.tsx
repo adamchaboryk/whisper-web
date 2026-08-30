@@ -17,6 +17,7 @@ import Constants, {
   DTYPES,
   LANGUAGES,
   MODELS,
+  isIOS,
 } from "../utils/Constants";
 import { Transcriber, TranscriberData } from "../hooks/useTranscriber";
 import AudioRecorder from "./AudioRecorder";
@@ -147,13 +148,13 @@ export function AudioManager(props: {
   // Combine all in-flight model file downloads into a single byte-weighted percentage.
   const isTranscriptLengthMismatched = useMemo(() => {
     if (!props.transcriptChunks?.length || !audioData?.buffer?.duration) return false;
-    
+
     const lastChunk = props.transcriptChunks[props.transcriptChunks.length - 1];
     const transcriptDuration = lastChunk.timestamp[1] ?? lastChunk.timestamp[0] ?? 0;
     const audioDuration = audioData.buffer.duration;
-    
+
     const diff = Math.abs(transcriptDuration - audioDuration);
-    // Consider significantly different if the difference is more than 10% of the audio duration 
+    // Consider significantly different if the difference is more than 10% of the audio duration
     // AND at least 10 seconds.
     return diff > Math.max(10, audioDuration * 0.1);
   }, [props.transcriptChunks, audioData]);
@@ -595,7 +596,7 @@ function SettingsModal(props: {
     );
   }, [props.transcriber.model]);
 
-  const HAS_WEBGPU_API = "gpu" in navigator && !!(navigator as Navigator & { gpu?: unknown }).gpu;
+  const HAS_WEBGPU_API = !isIOS && "gpu" in navigator && !!(navigator as Navigator & { gpu?: unknown }).gpu;
   const [IS_WEBGPU_AVAILABLE, setIsWebgpuAvailable] = useState(false);
   // Tracks whether the async WebGPU support check has finished, so we don't
   // prematurely reset settings based on the initial "unavailable" default.

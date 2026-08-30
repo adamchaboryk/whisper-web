@@ -46,6 +46,7 @@ interface ProgressItem {
   total: number;
   name: string;
   status: string;
+  phase?: string;
 }
 
 interface TranscriberUpdateData {
@@ -264,7 +265,13 @@ export function useTranscriber(): Transcriber {
         setProgressItems((prev) =>
           prev.map((item) => {
             if (item.file === message.file) {
-              return { ...item, progress: message.progress };
+              return {
+                ...item,
+                progress: message.progress,
+                loaded: message.loaded ?? item.loaded,
+                total: message.total ?? item.total,
+                phase: message.phase ?? item.phase
+              };
             }
             return item;
           }),
