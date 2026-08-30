@@ -385,7 +385,7 @@ self.addEventListener("message", async (event) => {
       globalTps = chunkResult.tps; // keep last chunk's TPS
 
       if (offset + SAMPLES_PER_CHUNK < fullAudio.length) {
-        await new Promise(resolve => setTimeout(resolve, 500));
+        await new Promise(resolve => setTimeout(resolve, 2500));
       }
     }
 
