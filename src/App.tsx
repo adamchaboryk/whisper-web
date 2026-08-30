@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { ApplicationControls, AudioManager } from "./components/AudioManager";
 import Transcript from "./components/Transcript";
 import { TranscriberData, useTranscriber } from "./hooks/useTranscriber";
+import { formatSrtChunks } from "./utils/SubtitleUtils";
 
 function App() {
   const transcriber = useTranscriber();
@@ -44,7 +45,10 @@ function App() {
     setDraftTranscript({ source: output, chunks: savedChunks ?? output.chunks });
   };
 
-  const handleChunkTextChange = (index: number, text: string) => {
+  const handleChunkUpdate = (
+    index: number,
+    updatedChunk: { text: string; timestamp: [number, number | null] }
+  ) => {
     const output = transcriber.output;
     if (!output || output.isBusy) {
       return;
@@ -55,15 +59,18 @@ function App() {
       return {
         source: output,
         chunks: chunks.map((chunk, chunkIndex) =>
-          chunkIndex === index ? { ...chunk, text } : chunk,
+          chunkIndex === index ? updatedChunk : chunk,
         ),
       };
     });
   };
 
   const saveEdits = () => {
-    if (draftTranscript?.source === transcriber.output) {
-      setSavedTranscript(draftTranscript);
+    if (draftTranscript && draftTranscript.source === transcriber.output) {
+      setSavedTranscript({
+        source: draftTranscript.source,
+        chunks: formatSrtChunks(draftTranscript.chunks),
+      });
     }
     setDraftTranscript(undefined);
   };
@@ -112,7 +119,7 @@ function App() {
           <Transcript
             transcribedData={transcriber.output}
             chunks={previewChunks}
-            onChunkTextChange={handleChunkTextChange}
+            onChunkUpdate={handleChunkUpdate}
             onSeekTo={handleSeekTo}
             isEditing={Boolean(draftChunks)}
             onStartEditing={startEditing}
@@ -133,7 +140,7 @@ function App() {
       </aside>
       <footer>
         <p>Transcription is powered by machine learning models downloaded directly to your browser's local memory. Processing speed depends on your device's processing power. You can explore and switch models in <em>Settings.</em></p>
-        <p><strong>Note:</strong> This website works best in Google Chrome or Microsoft Edge.</p>
+        <p><strong>Note:</strong> This website works best in Google Chrome or Microsoft Edge on a desktop. Mobile devices may offer limited functionality.</p>
       </footer>
     </div>
   );

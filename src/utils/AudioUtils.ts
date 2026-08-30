@@ -45,3 +45,16 @@ function formatSrtTimestamp(time: number) {
 export function formatSrtTimeRange(start: number, end: number) {
   return `${formatSrtTimestamp(start)} --> ${formatSrtTimestamp(end)}`;
 }
+
+export function parseAudioTimestamp(timestamp: string): number | null {
+  const parts = timestamp.trim().split(":");
+  if (parts.length === 0) return null;
+
+  let seconds = 0;
+  for (let i = 0; i < parts.length; i++) {
+    const value = parseFloat(parts[i]);
+    if (isNaN(value)) return null;
+    seconds = seconds * 60 + value;
+  }
+  return seconds;
+}

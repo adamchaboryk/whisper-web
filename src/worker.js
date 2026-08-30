@@ -39,7 +39,7 @@ const createCanonicalWav = (audio, sampleRate = 16000) => {
 
 const toCaptionChunks = (chunks) => {
   const captionChunks = [];
-  const MAX_LINE_CHARACTERS = 40;
+  const MAX_LINE_CHARACTERS = 42;
 
   for (const chunk of chunks) {
     const words = chunk.text.trim().split(/\s+/).filter(Boolean);
@@ -137,7 +137,7 @@ const transcribeWithParakeet = async ({ audio, formatForCaptions, signal }) => {
     let currentChunk = null;
     const MAX_CHUNK_DURATION_SECONDS = 30;
     const MAX_PAUSE_SECONDS = 1.5;
-    const MAX_LINE_CHARACTERS = 40;
+    const MAX_LINE_CHARACTERS = 42;
     const MIN_LINE_CHARACTERS = 32;
 
     const getLineLengths = (text) => text.split("\n").map((line) => line.length);

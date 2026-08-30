@@ -133,7 +133,7 @@ export function AudioManager(props: {
         audioData.buffer,
         audioData.blob,
         audioData.sourceName,
-        audioData.mimeType === "video/mp4",
+        true, // formatForCaptions
       );
     }
   }, [audioData, props.transcriber]);

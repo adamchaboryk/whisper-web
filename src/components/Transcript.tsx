@@ -12,13 +12,14 @@ import {
   useInteractions,
 } from "@floating-ui/react";
 import { SummaryData, TranscriberData } from "../hooks/useTranscriber";
-import { formatAudioTimestamp, formatSrtTimeRange } from "../utils/AudioUtils";
+import { formatAudioTimestamp, formatSrtTimeRange, parseAudioTimestamp } from "../utils/AudioUtils";
+import { formatSrtChunks } from "../utils/SubtitleUtils";
 import { Spinner } from "./TranscribeButton";
 
 interface Props {
   transcribedData: TranscriberData | undefined;
   chunks?: TranscriberData["chunks"];
-  onChunkTextChange?: (index: number, text: string) => void;
+  onChunkUpdate?: (index: number, updatedChunk: { text: string; timestamp: [number, number | null] }) => void;
   onSeekTo?: (time: number) => void;
   isEditing?: boolean;
   onStartEditing?: () => void;
@@ -93,6 +94,62 @@ function FilmIcon(props: { className?: string }) {
   );
 }
 
+const sanitizeHTML = (html: string) => {
+  const doc = new DOMParser().parseFromString(html, "text/html");
+
+  const walk = (node: Node): string => {
+    if (node.nodeType === Node.TEXT_NODE) {
+      return (node.textContent || "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+    }
+    if (node.nodeType === Node.ELEMENT_NODE) {
+      const el = node as HTMLElement;
+      const tag = el.tagName.toLowerCase();
+      let inner = "";
+      for (const child of Array.from(el.childNodes)) {
+        inner += walk(child);
+      }
+
+      if (tag === "b" || tag === "strong") {
+        return `<b>${inner}</b>`;
+      }
+      if (tag === "i" || tag === "em") {
+        return `<i>${inner}</i>`;
+      }
+      if (tag === "u") {
+        return `<u>${inner}</u>`;
+      }
+      if (tag === "br") {
+        return `\n`;
+      }
+      if (tag === "div" || tag === "p") {
+        return inner ? `\n${inner}` : `\n`;
+      }
+      if (tag === "span" || tag === "font") {
+        if (el.style.fontWeight === "bold" || el.style.fontWeight >= "700") {
+          inner = `<b>${inner}</b>`;
+        }
+        if (el.style.fontStyle === "italic") {
+          inner = `<i>${inner}</i>`;
+        }
+        if (el.style.textDecoration.includes("underline")) {
+          inner = `<u>${inner}</u>`;
+        }
+        return inner;
+      }
+
+      return inner;
+    }
+    return "";
+  };
+
+  let result = "";
+  for (const child of Array.from(doc.body.childNodes)) {
+    result += walk(child);
+  }
+
+  return result;
+};
+
 function EditableChunk(props: {
   text: string;
   label: string;
@@ -102,10 +159,16 @@ function EditableChunk(props: {
 
   useLayoutEffect(() => {
     const editor = editorRef.current;
-    if (editor && document.activeElement !== editor && editor.innerText !== props.text) {
-      editor.innerText = props.text;
+    if (editor && document.activeElement !== editor && editor.innerHTML !== props.text) {
+      editor.innerHTML = props.text;
     }
   }, [props.text]);
+
+  const handleInput = (event: React.FormEvent<HTMLDivElement>) => {
+    const html = event.currentTarget.innerHTML;
+    const sanitized = sanitizeHTML(html);
+    props.onTextChange?.(sanitized);
+  };
 
   return (
     <div
@@ -115,7 +178,46 @@ function EditableChunk(props: {
       suppressContentEditableWarning
       role='textbox'
       aria-label={props.label}
-      onInput={(event) => props.onTextChange?.(event.currentTarget.innerText ?? "")}
+      onInput={handleInput}
+    />
+  );
+}
+
+function EditableTimestamp(props: {
+  timestamp: number;
+  onTimestampChange?: (newTimestamp: number) => void;
+}) {
+  const [value, setValue] = useState(() => formatAudioTimestamp(props.timestamp));
+
+  // Sync value when props.timestamp changes from outside
+  useEffect(() => {
+    setValue(formatAudioTimestamp(props.timestamp));
+  }, [props.timestamp]);
+
+  const handleBlur = () => {
+    const parsed = parseAudioTimestamp(value);
+    if (parsed !== null && parsed !== props.timestamp) {
+      props.onTimestampChange?.(parsed);
+      setValue(formatAudioTimestamp(parsed));
+    } else {
+      // Revert if invalid or unchanged
+      setValue(formatAudioTimestamp(props.timestamp));
+    }
+  };
+
+  return (
+    <input
+      type="text"
+      className='mr-5 shrink-0 w-20 text-left tabular-nums focus:outline-none focus:ring-2 focus:ring-blue-500 rounded border border-dashed border-blue-300 bg-blue-50/60 px-1 py-1 dark:border-blue-400/50 dark:bg-blue-950/30'
+      value={value}
+      onChange={(e) => setValue(e.target.value)}
+      onBlur={handleBlur}
+      onKeyDown={(e) => {
+        if (e.key === "Enter") {
+          e.preventDefault();
+          e.currentTarget.blur();
+        }
+      }}
     />
   );
 }
@@ -182,10 +284,22 @@ function SaveButton(props: { onSave?: () => void; shortcut: string }) {
   );
 }
 
+const extractPlainText = (html: string) => {
+  const tmp = document.createElement("div");
+  tmp.innerHTML = html;
+  return tmp.textContent || tmp.innerText || "";
+};
+
+const decodeSrtText = (html: string) => {
+  const tmp = document.createElement("textarea");
+  tmp.innerHTML = html;
+  return tmp.value;
+};
+
 export default function Transcript({
   transcribedData,
   chunks: editedChunks,
-  onChunkTextChange,
+  onChunkUpdate,
   onSeekTo,
   isEditing,
   onStartEditing,
@@ -211,7 +325,7 @@ export default function Transcript({
 
   const exportTXT = () => {
     const text = chunks
-      .map((chunk) => chunk.text)
+      .map((chunk) => extractPlainText(chunk.text))
       .join(" ")
       .trim();
 
@@ -233,10 +347,14 @@ export default function Transcript({
 
   const exportSRT = () => {
     let srt = "";
-    for (let i = 0; i < chunks.length; i++) {
+
+    // Ensure chunks are formatted before export just in case
+    const formattedChunks = formatSrtChunks(chunks);
+
+    for (let i = 0; i < formattedChunks.length; i++) {
       srt += `${i + 1}\n`;
-      srt += `${formatSrtTimeRange(chunks[i].timestamp[0], chunks[i].timestamp[1] ?? chunks[i].timestamp[0])}\n`;
-      srt += `${chunks[i].text}\n\n`;
+      srt += `${formatSrtTimeRange(formattedChunks[i].timestamp[0], formattedChunks[i].timestamp[1] ?? formattedChunks[i].timestamp[0])}\n`;
+      srt += `${decodeSrtText(formattedChunks[i].text)}\n\n`;
     }
     const blob = new Blob([srt], { type: "text/plain" });
     saveBlob(blob, "transcript.srt");
@@ -244,7 +362,7 @@ export default function Transcript({
 
   const copyToClipboard = async () => {
     let text = chunks
-      .map((chunk) => chunk.text)
+      .map((chunk) => extractPlainText(chunk.text))
       .join(" ")
       .trim();
 
@@ -407,31 +525,44 @@ export default function Transcript({
                   key={`${transcribedData.text}-${i}`}
                   className='w-full flex flex-row mb-2 bg-slate-50 dark:bg-slate-700 rounded-lg p-4 shadow-xl shadow-black/5 ring-1 ring-slate-700/10 dark:ring-slate-500/30 transition-all duration-150 ease-out'
                 >
-                  <button
-                    ref={(element) => { timestampRefs.current[i] = element; }}
-                    type='button'
-                    className='mr-5 shrink-0 text-left tabular-nums hover:text-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500 rounded dark:hover:text-blue-300'
-                    onClick={() => onSeekTo?.(chunk.timestamp[0])}
-                    onKeyDown={(event) => {
-                      const offset = event.key === "ArrowDown" ? 1 : event.key === "ArrowUp" ? -1 : 0;
-                      if (offset) {
-                        event.preventDefault();
-                        timestampRefs.current[i + offset]?.focus();
-                      }
-                    }}
-                    tabIndex={isEditing || i > 0 ? -1 : 0}
-                    aria-label={`Play from ${formatAudioTimestamp(chunk.timestamp[0])}`}
-                  >
-                    {formatAudioTimestamp(chunk.timestamp[0])}
-                  </button>
                   {isEditing ? (
-                    <EditableChunk
-                      text={chunk.text.trimStart()}
-                      label={`Transcript segment at ${formatAudioTimestamp(chunk.timestamp[0])}`}
-                      onTextChange={(text) => onChunkTextChange?.(i, text)}
-                    />
+                    <>
+                      <EditableTimestamp
+                        timestamp={chunk.timestamp[0]}
+                        onTimestampChange={(newTimestamp) => {
+                          onChunkUpdate?.(i, { ...chunk, timestamp: [newTimestamp, chunk.timestamp[1]] });
+                        }}
+                      />
+                      <EditableChunk
+                        text={chunk.text.trimStart()}
+                        label={`Transcript segment at ${formatAudioTimestamp(chunk.timestamp[0])}`}
+                        onTextChange={(text) => onChunkUpdate?.(i, { ...chunk, text })}
+                      />
+                    </>
                   ) : (
-                    <div className='flex-1 whitespace-pre-wrap'>{chunk.text.trimStart()}</div>
+                    <>
+                      <button
+                        ref={(element) => { timestampRefs.current[i] = element; }}
+                        type='button'
+                        className='mr-5 shrink-0 text-left tabular-nums hover:text-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500 rounded dark:hover:text-blue-300'
+                        onClick={() => onSeekTo?.(chunk.timestamp[0])}
+                        onKeyDown={(event) => {
+                          const offset = event.key === "ArrowDown" ? 1 : event.key === "ArrowUp" ? -1 : 0;
+                          if (offset) {
+                            event.preventDefault();
+                            timestampRefs.current[i + offset]?.focus();
+                          }
+                        }}
+                        tabIndex={i > 0 ? -1 : 0}
+                        aria-label={`Play from ${formatAudioTimestamp(chunk.timestamp[0])}`}
+                      >
+                        {formatAudioTimestamp(chunk.timestamp[0])}
+                      </button>
+                      <div
+                        className='flex-1 whitespace-pre-wrap'
+                        dangerouslySetInnerHTML={{ __html: sanitizeHTML(chunk.text).trimStart() }}
+                      />
+                    </>
                   )}
                 </div>
               ))}
