@@ -18,6 +18,7 @@ import Constants, {
   LANGUAGES,
   MODELS,
   isIOS,
+  isMobileOrTablet,
 } from "../utils/Constants";
 import { Transcriber, TranscriberData } from "../hooks/useTranscriber";
 import AudioRecorder from "./AudioRecorder";
@@ -448,6 +449,11 @@ export function AudioManager(props: {
               <p className="mb-4">
                 Transcription runs privately in your browser. Proceeding will save a {getModelSize(props.transcriber.model, props.transcriber.dtype)} model to your browser's temporary storage so it works offline. You can change models anytime in <em>Settings.</em>
               </p>
+              {isMobileOrTablet && (
+                <p className="mb-4 text-sm bg-blue-50 dark:bg-blue-900/30 text-blue-800 dark:text-blue-200 p-3 rounded-md">
+                  <strong>⚠️ Mobile device detected:</strong> A lighter model was selected by default as it is less likely to crash due to hardware limits. Transcription may not be as accurate.
+                </p>
+              )}
               {typeof navigator !== "undefined" && (navigator as unknown as { connection?: { type?: string } }).connection?.type === "cellular" && (
                 <p className="mt-4 font-semibold text-amber-600 dark:text-amber-500">
                   ⚠️ It does not appear you are connected to Wi-Fi. Downloading the model over cellular data may incur charges.
@@ -596,7 +602,7 @@ function SettingsModal(props: {
     );
   }, [props.transcriber.model]);
 
-  const HAS_WEBGPU_API = !isIOS && "gpu" in navigator && !!(navigator as Navigator & { gpu?: unknown }).gpu;
+  const HAS_WEBGPU_API = "gpu" in navigator && !!(navigator as Navigator & { gpu?: unknown }).gpu;
   const [IS_WEBGPU_AVAILABLE, setIsWebgpuAvailable] = useState(false);
   // Tracks whether the async WebGPU support check has finished, so we don't
   // prematurely reset settings based on the initial "unavailable" default.
@@ -638,7 +644,7 @@ function SettingsModal(props: {
   }, [HAS_WEBGPU_API]);
 
   useEffect(() => {
-    if (hasCheckedWebgpu && !IS_WEBGPU_AVAILABLE && props.transcriber.gpu) {
+    if (hasCheckedWebgpu && (!IS_WEBGPU_AVAILABLE || isIOS) && props.transcriber.gpu) {
       props.transcriber.setGPU(false);
     }
   }, [hasCheckedWebgpu, IS_WEBGPU_AVAILABLE, props.transcriber]);
@@ -650,7 +656,7 @@ function SettingsModal(props: {
   }, [hasCheckedWebgpu, IS_WEBGPU_AVAILABLE, props.transcriber]);
 
   useEffect(() => {
-    if (hasCheckedWebgpu && !IS_WEBGPU_AVAILABLE && props.transcriber.dtype === "fp16") {
+    if (hasCheckedWebgpu && (!IS_WEBGPU_AVAILABLE || isIOS) && props.transcriber.dtype === "fp16") {
       props.transcriber.setDtype(Constants.DEFAULT_DTYPE);
     }
   }, [hasCheckedWebgpu, IS_WEBGPU_AVAILABLE, props.transcriber]);
@@ -733,14 +739,14 @@ function SettingsModal(props: {
                 }}
               >
                 {Object.entries(DTYPES)
-                  .filter(([value]) => value !== "fp16" || IS_WEBGPU_AVAILABLE)
+                  .filter(([value]) => value !== "fp16" || (IS_WEBGPU_AVAILABLE && !isIOS))
                   .map(([value, label]) => (
                     <option key={value} value={value}>
                       {label}
                     </option>
                   ))}
               </select>
-              {IS_WEBGPU_AVAILABLE && (
+              {IS_WEBGPU_AVAILABLE && !isIOS && (
                 <div className='flex justify-between items-center mb-3 px-1'>
                   <div className='flex'>
                     <input

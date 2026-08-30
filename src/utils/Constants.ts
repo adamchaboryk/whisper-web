@@ -131,7 +131,7 @@ export const LANGUAGES = {
   su: "sundanese",
 };
 
-const isMobileOrTablet = mobileTabletCheck();
+export const isMobileOrTablet = mobileTabletCheck();
 
 export const MODELS: { [key: string]: [string, string] } = {
   "parakeet.wgsl": ["NVIDIA Parakeet (Fast & Accurate)", "en"],
@@ -156,10 +156,13 @@ export enum AudioSource {
 
 
 function getDefaultModel(language: string): string {
+  if (isMobileOrTablet) {
+    return "onnx-community/whisper-tiny";
+  }
   if (language === "en") {
     return "parakeet.wgsl";
   }
-  return `onnx-community/whisper-${isMobileOrTablet ? "base" : "small"}`;
+  return "onnx-community/whisper-small";
 }
 
 function getDefaultLanguage(language: string): string {
