@@ -96,7 +96,7 @@ const toCaptionChunks = (chunks) => {
   return captionChunks;
 };
 
-const transcribeWithParakeet = async ({ audio, formatForCaptions }) => {
+const transcribeWithParakeet = async ({ audio, formatForCaptions, signal }) => {
   const audioBlob = createCanonicalWav(audio);
   audio = null;
 
@@ -220,6 +220,7 @@ const transcribeWithParakeet = async ({ audio, formatForCaptions }) => {
 
   const result = await parakeetTranscriber.transcribe(audioBlob, {
     sourceName: "audio.wav",
+    signal,
     onProgress: ({ fraction }) => {
       self.postMessage({
         status: "transcription_progress",
@@ -296,21 +297,22 @@ self.addEventListener("message", async (event) => {
     let globalTps = 0;
     const globalDuration = message.duration;
 
-    let currentTimeOffset = 0;
-    let currentOffset = 0;
-
-    for (let offset = 0; offset < fullAudio.length; offset += SAMPLES_PER_CHUNK) {
-      const audioChunk = fullAudio.subarray(offset, offset + SAMPLES_PER_CHUNK);
-      currentTimeOffset = offset / SAMPLE_RATE;
-      currentOffset = offset;
-
+    const runChunk = async (audioChunk, offset, isSubChunk) => {
+      const currentTimeOffset = offset / SAMPLE_RATE;
       const chunkMessage = {
         ...message,
         audio: audioChunk,
         duration: audioChunk.length / SAMPLE_RATE
       };
 
+      let lastProgressTime = Date.now();
+      const abortController = new AbortController();
+      chunkMessage.signal = abortController.signal;
+
       self.postMessage = (msg) => {
+        if (msg.status === "update" || msg.status === "transcription_progress") {
+          lastProgressTime = Date.now();
+        }
         if (msg.status === "update") {
           const shiftedChunks = msg.data.chunks.map(c => ({
             ...c,
@@ -319,7 +321,6 @@ self.addEventListener("message", async (event) => {
               c.timestamp[1] !== null ? c.timestamp[1] + currentTimeOffset : null
             ]
           }));
-
           originalPostMessage({
             status: "update",
             data: {
@@ -342,47 +343,78 @@ self.addEventListener("message", async (event) => {
         }
       };
 
-      let chunkResult = await transcribe(chunkMessage).catch(error => {
-        // On mobile, WebGPU device-lost errors or TDT output overflows are common.
-        // Fall back to Whisper tiny (WASM) for the current chunk rather than aborting.
-        if (isParakeet && /device.*lost|gpu.*lost|out.*memory|overflow/i.test(error?.message ?? String(error))) {
-          const isOverflow = /overflow/i.test(error?.message ?? String(error));
-          console.warn(`[whisper-web] WebGPU error (${isOverflow ? "overflow" : "device lost"}) during parakeet transcription. Skipping this chunk.`);
+      const watchdog = setInterval(() => {
+        if (Date.now() - lastProgressTime > 15000) {
+          abortController.abort(new Error("watchdog_timeout"));
+        }
+      }, 1000);
 
-          // Only dispose the transcriber if it's a hard crash (device lost/OOM).
-          // If it's just an overflow (inference failure on a specific chunk), we can keep the model loaded.
-          if (!isOverflow && parakeetTranscriber) {
-            try { parakeetTranscriber.dispose(); } catch { /* already dead */ }
+      try {
+        const chunkResult = await transcribe(chunkMessage);
+        return chunkResult;
+      } catch (error) {
+        const errorMsg = error?.message ?? String(error);
+        if (isParakeet && /watchdog_timeout|device.*lost|gpu.*lost|out.*memory|overflow|invalid.*token/i.test(errorMsg)) {
+          console.warn(`[whisper-web] Chunk failed at offset ${offset} (${isSubChunk ? '30s sub-chunk' : '5m chunk'}):`, errorMsg);
+          if (parakeetTranscriber) {
+            try { parakeetTranscriber.dispose(); } catch { }
             parakeetTranscriber = null;
           }
-
-          // Return an empty result to skip this chunk without crashing the whole transcription
-          return {
-            text: "",
-            chunks: [],
-            tps: 0,
-            duration: chunkMessage.duration
-          };
+          if (!isSubChunk) {
+            return "RETRY_SUBCHUNKS";
+          }
+          // If a 30s sub-chunk fails, it's truly poisoned. Skip it.
+          return { text: "", chunks: [], tps: 0, duration: chunkMessage.duration };
         }
         throw error;
-      });
-
-      if (!chunkResult) {
+      } finally {
+        clearInterval(watchdog);
         self.postMessage = originalPostMessage;
-        return; // Abort on error
       }
+    };
 
-      const shiftedChunks = chunkResult.chunks.map(c => ({
-        ...c,
-        timestamp: [
-          c.timestamp[0] !== null ? c.timestamp[0] + currentTimeOffset : null,
-          c.timestamp[1] !== null ? c.timestamp[1] + currentTimeOffset : null
-        ]
-      }));
+    for (let offset = 0; offset < fullAudio.length; offset += SAMPLES_PER_CHUNK) {
+      const audioChunk = fullAudio.subarray(offset, offset + SAMPLES_PER_CHUNK);
 
-      allChunks.push(...shiftedChunks);
-      fullText += (fullText ? " " : "") + chunkResult.text;
-      globalTps = chunkResult.tps; // keep last chunk's TPS
+      const chunkResult = await runChunk(audioChunk, offset, false);
+
+      if (chunkResult === "RETRY_SUBCHUNKS") {
+        console.warn(`[whisper-web] Splitting 5-minute chunk into 30s sub-chunks to bypass poisoned audio...`);
+        const SUBCHUNK_SAMPLES = 30 * SAMPLE_RATE;
+
+        for (let sub = 0; sub < audioChunk.length; sub += SUBCHUNK_SAMPLES) {
+          const subData = audioChunk.subarray(sub, sub + SUBCHUNK_SAMPLES);
+          const subResult = await runChunk(subData, offset + sub, true);
+
+          if (subResult && subResult.text) {
+            const shiftedChunks = subResult.chunks.map(c => ({
+              ...c,
+              timestamp: [
+                c.timestamp[0] !== null ? c.timestamp[0] + ((offset + sub) / SAMPLE_RATE) : null,
+                c.timestamp[1] !== null ? c.timestamp[1] + ((offset + sub) / SAMPLE_RATE) : null
+              ]
+            }));
+            allChunks.push(...shiftedChunks);
+            fullText += (fullText ? " " : "") + subResult.text;
+            if (subResult.tps) globalTps = subResult.tps;
+          }
+
+          if (sub + SUBCHUNK_SAMPLES < audioChunk.length) {
+            await new Promise(resolve => setTimeout(resolve, 2500));
+          }
+        }
+      } else if (chunkResult) {
+        const shiftedChunks = chunkResult.chunks.map(c => ({
+          ...c,
+          timestamp: [
+            c.timestamp[0] !== null ? c.timestamp[0] + (offset / SAMPLE_RATE) : null,
+            c.timestamp[1] !== null ? c.timestamp[1] + (offset / SAMPLE_RATE) : null
+          ]
+        }));
+        allChunks.push(...shiftedChunks);
+        fullText += (fullText ? " " : "") + chunkResult.text;
+        if (chunkResult.tps) globalTps = chunkResult.tps;
+      }
 
       if (offset + SAMPLES_PER_CHUNK < fullAudio.length) {
         await new Promise(resolve => setTimeout(resolve, 2500));
@@ -419,9 +451,9 @@ class AutomaticSpeechRecognitionPipelineFactory extends PipelineFactory {
   static gpu = false;
 }
 
-const transcribe = async ({ audio, formatForCaptions, model, dtype, gpu, subtask, language, duration }) => {
+const transcribe = async ({ audio, formatForCaptions, model, dtype, gpu, subtask, language, duration, signal }) => {
   if (model === "parakeet.wgsl") {
-    return transcribeWithParakeet({ audio, formatForCaptions });
+    return transcribeWithParakeet({ audio, formatForCaptions, signal });
   }
 
   const isDistilWhisper = model.startsWith("distil-whisper/");
