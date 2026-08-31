@@ -313,7 +313,7 @@ self.addEventListener("message", async (event) => {
       chunkMessage.signal = abortController.signal;
 
       self.postMessage = (msg) => {
-        if (msg.status === "update" || msg.status === "transcription_progress") {
+        if (msg.status === "update" || msg.status === "transcription_progress" || msg.status === "progress" || msg.status === "initiate" || msg.status === "ready" || msg.status === "done") {
           lastProgressTime = Date.now();
         }
         if (msg.status === "update") {
@@ -357,7 +357,7 @@ self.addEventListener("message", async (event) => {
         return chunkResult;
       } catch (error) {
         const errorMsg = error?.message ?? String(error);
-        if (isParakeet && /watchdog_timeout|device.*lost|gpu.*lost|out.*memory|overflow|invalid.*token/i.test(errorMsg)) {
+        if (isParakeet && /watchdog_timeout|aborted|device.*lost|gpu.*lost|out.*memory|overflow|invalid.*token/i.test(errorMsg)) {
           console.warn(`[whisper-web] Chunk failed at offset ${offset} (${isSubChunk ? '30s sub-chunk' : '5m chunk'}):`, errorMsg);
           if (parakeetTranscriber) {
             try { parakeetTranscriber.dispose(); } catch { }
