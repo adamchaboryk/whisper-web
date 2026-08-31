@@ -15,10 +15,19 @@ function App() {
     source: TranscriberData;
     chunks: TranscriberData["chunks"];
   }>();
+  const [currentTime, setCurrentTime] = useState<number | undefined>(undefined);
+  const [isAutoScrollEnabled, setIsAutoScrollEnabled] = useState(() => {
+    const stored = window.localStorage.getItem("whisper-web-autoscroll");
+    return stored ? stored === "true" : true;
+  });
   const [isDark, setIsDark] = useState(() => {
     const storedTheme = window.localStorage.getItem("whisper-web-theme");
     return storedTheme ? storedTheme === "dark" : window.matchMedia("(prefers-color-scheme: dark)").matches;
   });
+
+  useEffect(() => {
+    window.localStorage.setItem("whisper-web-autoscroll", isAutoScrollEnabled.toString());
+  }, [isAutoScrollEnabled]);
 
   useEffect(() => {
     document.documentElement.classList.toggle("dark", isDark);
@@ -115,6 +124,7 @@ function App() {
             onGenerateSummary={handleGenerateSummary}
             transcriptChunks={previewChunks}
             onSeekReady={handleSeekReady}
+            onTimeUpdate={setCurrentTime}
           />
           <Transcript
             transcribedData={transcriber.output}
@@ -128,6 +138,9 @@ function App() {
             summary={transcriber.summary}
             onGenerateSummary={handleGenerateSummary}
             supportsSummarizer={transcriber.supportsSummarizer}
+            currentTime={currentTime}
+            isAutoScrollSettingEnabled={isAutoScrollEnabled}
+            setIsAutoScrollSettingEnabled={setIsAutoScrollEnabled}
           />
         </div>
       </main>
@@ -136,6 +149,8 @@ function App() {
           isDark={isDark}
           onThemeToggle={() => setIsDark((current) => !current)}
           transcriber={transcriber}
+          isAutoScrollEnabled={isAutoScrollEnabled}
+          setIsAutoScrollEnabled={setIsAutoScrollEnabled}
         />
       </aside>
       <footer>

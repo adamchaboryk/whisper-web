@@ -28,6 +28,9 @@ interface Props {
   summary?: SummaryData;
   onGenerateSummary?: () => void;
   supportsSummarizer?: boolean;
+  currentTime?: number;
+  isAutoScrollSettingEnabled?: boolean;
+  setIsAutoScrollSettingEnabled?: (enabled: boolean) => void;
 }
 
 function formatTranscriptionDuration(seconds: number): string {
@@ -187,12 +190,14 @@ function EditableTimestamp(props: {
   timestamp: number;
   onTimestampChange?: (newTimestamp: number) => void;
 }) {
+  const [prevTimestamp, setPrevTimestamp] = useState(props.timestamp);
   const [value, setValue] = useState(() => formatAudioTimestamp(props.timestamp));
 
   // Sync value when props.timestamp changes from outside
-  useEffect(() => {
+  if (props.timestamp !== prevTimestamp) {
+    setPrevTimestamp(props.timestamp);
     setValue(formatAudioTimestamp(props.timestamp));
-  }, [props.timestamp]);
+  }
 
   const handleBlur = () => {
     const parsed = parseAudioTimestamp(value);
@@ -308,6 +313,9 @@ export default function Transcript({
   summary,
   onGenerateSummary,
   supportsSummarizer,
+  currentTime,
+  isAutoScrollSettingEnabled = true,
+  setIsAutoScrollSettingEnabled,
 }: Props) {
   const divRef = useRef<HTMLDivElement>(null);
   const timestampRefs = useRef<(HTMLButtonElement | null)[]>([]);
@@ -449,6 +457,58 @@ export default function Transcript({
     }
   }, [transcribedData?.transcriptionSeconds]);
 
+  const transcriptContainerRef = useRef<HTMLDivElement>(null);
+  const chunkRefs = useRef<(HTMLDivElement | null)[]>([]);
+  const activeChunkIndexRef = useRef<number>(-1);
+  const [autoScrollPaused, setAutoScrollPaused] = useState(false);
+  const prevTimeRef = useRef<number | undefined>(undefined);
+
+  useEffect(() => {
+    // Detect audio seek (time jumped by more than 1.5 seconds)
+    if (currentTime !== undefined && prevTimeRef.current !== undefined) {
+      if (Math.abs(currentTime - prevTimeRef.current) > 1.5) {
+        setAutoScrollPaused(false);
+      }
+    }
+    prevTimeRef.current = currentTime;
+
+    if (!chunks) return;
+
+    const activeIndex = chunks.findIndex((chunk, i) => {
+      return currentTime !== undefined && currentTime >= chunk.timestamp[0] && currentTime < (chunk.timestamp[1] ?? (chunks[i + 1]?.timestamp[0] ?? chunk.timestamp[0] + 5));
+    });
+
+    if (activeIndex !== -1 && activeIndex !== activeChunkIndexRef.current) {
+      activeChunkIndexRef.current = activeIndex;
+
+      if (isAutoScrollSettingEnabled && !autoScrollPaused && transcriptContainerRef.current && chunkRefs.current[activeIndex]) {
+        const container = transcriptContainerRef.current;
+        const chunkElement = chunkRefs.current[activeIndex];
+
+        if (chunkElement) {
+          const containerCenter = container.clientHeight / 2;
+          const chunkCenter = chunkElement.clientHeight / 2;
+          const scrollTop = chunkElement.offsetTop - containerCenter + chunkCenter;
+          container.scrollTo({ top: scrollTop, behavior: 'smooth' });
+        }
+      }
+    }
+  }, [currentTime, chunks, isAutoScrollSettingEnabled, autoScrollPaused]);
+
+  useEffect(() => {
+    if (!autoScrollPaused && isAutoScrollSettingEnabled && activeChunkIndexRef.current !== -1) {
+      const container = transcriptContainerRef.current;
+      const chunkElement = chunkRefs.current[activeChunkIndexRef.current];
+
+      if (container && chunkElement) {
+        const containerCenter = container.clientHeight / 2;
+        const chunkCenter = chunkElement.clientHeight / 2;
+        const scrollTop = chunkElement.offsetTop - containerCenter + chunkCenter;
+        container.scrollTo({ top: scrollTop, behavior: 'smooth' });
+      }
+    }
+  }, [autoScrollPaused, isAutoScrollSettingEnabled]);
+
   return (
     <div
       ref={divRef}
@@ -497,75 +557,84 @@ export default function Transcript({
           </div>
 
           <div
-            className={`relative w-full mt-3 mb-6 rounded-lg overflow-hidden ${isEditing
+            className={`relative w-full mt-3 mb-2 rounded-lg overflow-hidden ${isEditing
               ? "border-2 border-dashed border-blue-400 dark:border-blue-400/70"
               : "border border-slate-200 dark:border-slate-700"
               }`}
           >
             <div
+              ref={transcriptContainerRef}
               className='max-h-[400px] overflow-y-auto bg-white dark:bg-slate-800 p-3 sm:p-4 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-blue-500'
               tabIndex={0}
               role='region'
               aria-label='Transcript content'
+              onWheel={() => { setAutoScrollPaused(true); }}
+              onTouchMove={() => { setAutoScrollPaused(true); }}
+              onMouseLeave={() => { setAutoScrollPaused(false); }}
               onKeyDown={(event) => {
                 if (isEditing && event.key === "Escape") {
                   event.preventDefault();
                   event.stopPropagation();
                   onCancelEdits?.();
-                }
-                if (isEditing && (event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "s") {
-                  event.preventDefault();
-                  event.stopPropagation();
-                  onSaveEdits?.();
+                } else if (["ArrowUp", "ArrowDown", "PageUp", "PageDown", "Home", "End", " "].includes(event.key)) {
+                  setAutoScrollPaused(true);
                 }
               }}
             >
-              {chunks.map((chunk, i) => (
-                <div
-                  key={`${transcribedData.text}-${i}`}
-                  className='w-full flex flex-row mb-2 bg-slate-50 dark:bg-slate-700 rounded-lg p-4 shadow-xl shadow-black/5 ring-1 ring-slate-700/10 dark:ring-slate-500/30 transition-all duration-150 ease-out'
-                >
-                  {isEditing ? (
-                    <>
-                      <EditableTimestamp
-                        timestamp={chunk.timestamp[0]}
-                        onTimestampChange={(newTimestamp) => {
-                          onChunkUpdate?.(i, { ...chunk, timestamp: [newTimestamp, chunk.timestamp[1]] });
-                        }}
-                      />
-                      <EditableChunk
-                        text={chunk.text.trimStart()}
-                        label={`Transcript segment at ${formatAudioTimestamp(chunk.timestamp[0])}`}
-                        onTextChange={(text) => onChunkUpdate?.(i, { ...chunk, text })}
-                      />
-                    </>
-                  ) : (
-                    <>
-                      <button
-                        ref={(element) => { timestampRefs.current[i] = element; }}
-                        type='button'
-                        className='mr-5 shrink-0 text-left tabular-nums hover:text-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500 rounded dark:hover:text-blue-300'
-                        onClick={() => onSeekTo?.(chunk.timestamp[0])}
-                        onKeyDown={(event) => {
-                          const offset = event.key === "ArrowDown" ? 1 : event.key === "ArrowUp" ? -1 : 0;
-                          if (offset) {
-                            event.preventDefault();
-                            timestampRefs.current[i + offset]?.focus();
-                          }
-                        }}
-                        tabIndex={i > 0 ? -1 : 0}
-                        aria-label={`Play from ${formatAudioTimestamp(chunk.timestamp[0])}`}
-                      >
-                        {formatAudioTimestamp(chunk.timestamp[0])}
-                      </button>
-                      <div
-                        className='flex-1 whitespace-pre-wrap'
-                        dangerouslySetInnerHTML={{ __html: sanitizeHTML(chunk.text).trimStart() }}
-                      />
-                    </>
-                  )}
-                </div>
-              ))}
+              {chunks.map((chunk, i) => {
+                const isActive = currentTime !== undefined && currentTime >= chunk.timestamp[0] && currentTime < (chunk.timestamp[1] ?? (chunks[i + 1]?.timestamp[0] ?? chunk.timestamp[0] + 5));
+                return (
+                  <div
+                    key={`${transcribedData.text}-${i}`}
+                    ref={(el) => { chunkRefs.current[i] = el; }}
+                    className={`w-full flex flex-row mb-2 rounded-lg p-4 shadow-xl shadow-black/5 ring-1 ring-slate-700/10 dark:ring-slate-500/30 transition-all duration-150 ease-out ${isActive ? "bg-blue-100 dark:bg-blue-900/40" : "bg-slate-50 dark:bg-slate-700"
+                      }`}
+                  >
+                    {isEditing ? (
+                      <>
+                        <EditableTimestamp
+                          timestamp={chunk.timestamp[0]}
+                          onTimestampChange={(newTimestamp) => {
+                            onChunkUpdate?.(i, { ...chunk, timestamp: [newTimestamp, chunk.timestamp[1]] });
+                          }}
+                        />
+                        <EditableChunk
+                          text={chunk.text.trimStart()}
+                          label={`Transcript segment at ${formatAudioTimestamp(chunk.timestamp[0])}`}
+                          onTextChange={(text) => onChunkUpdate?.(i, { ...chunk, text })}
+                        />
+                      </>
+                    ) : (
+                      <>
+                        <button
+                          ref={(element) => { timestampRefs.current[i] = element; }}
+                          type='button'
+                          className='mr-5 shrink-0 text-left tabular-nums hover:text-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500 rounded dark:hover:text-blue-300'
+                          onClick={() => {
+                            setAutoScrollPaused(false);
+                            onSeekTo?.(chunk.timestamp[0]);
+                          }}
+                          onKeyDown={(event) => {
+                            const offset = event.key === "ArrowDown" ? 1 : event.key === "ArrowUp" ? -1 : 0;
+                            if (offset) {
+                              event.preventDefault();
+                              timestampRefs.current[i + offset]?.focus();
+                            }
+                          }}
+                          tabIndex={i > 0 ? -1 : 0}
+                          aria-label={`Play from ${formatAudioTimestamp(chunk.timestamp[0])}`}
+                        >
+                          {formatAudioTimestamp(chunk.timestamp[0])}
+                        </button>
+                        <div
+                          className='flex-1 whitespace-pre-wrap'
+                          dangerouslySetInnerHTML={{ __html: sanitizeHTML(chunk.text).trimStart() }}
+                        />
+                      </>
+                    )}
+                  </div>
+                );
+              })}
             </div>
             {/* fade cue hinting the panel is scrollable */}
             <div
@@ -574,7 +643,20 @@ export default function Transcript({
             />
           </div>
 
-          <div className='w-full mt-5 flex flex-wrap items-center justify-center gap-3'>
+          <div className='w-full flex justify-end mb-5 pr-2'>
+            <label className='flex items-center gap-1.5 text-sm font-medium text-slate-500 dark:text-slate-400 cursor-pointer' htmlFor="auto-scroll">
+              <input
+                id="auto-scroll"
+                type='checkbox'
+                checked={isAutoScrollSettingEnabled}
+                onChange={(e) => setIsAutoScrollSettingEnabled?.(e.target.checked)}
+                className='rounded border-slate-300 text-blue-600 focus:ring-blue-500 h-3.5 w-3.5 bg-slate-50 dark:bg-slate-700 dark:border-slate-500'
+              />
+              Auto-scroll transcript
+            </label>
+          </div>
+
+          <div className='w-full mt-2 flex flex-wrap items-center justify-center gap-3'>
             {exportButtons.map((button, i) => (
               <button
                 key={i}

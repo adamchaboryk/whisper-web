@@ -7,6 +7,7 @@ export default function AudioPlayer(props: {
   isTranscribing: boolean;
   transcriptChunks?: { text: string; timestamp: [number, number | null] }[];
   onSeekReady?: (seekTo: (time: number) => void) => void;
+  onTimeUpdate?: (time: number) => void;
 }) {
   const audioPlayer = useRef<HTMLAudioElement>(null);
   const videoPlayer = useRef<HTMLVideoElement>(null);
@@ -20,6 +21,25 @@ export default function AudioPlayer(props: {
       mediaPlayer.load();
     }
   }, [props.audioUrl]);
+
+  const { onTimeUpdate } = props;
+  useEffect(() => {
+    const handleTimeUpdate = (e: Event) => {
+      const media = e.target as HTMLMediaElement;
+      onTimeUpdate?.(media.currentTime);
+    };
+
+    const audio = audioPlayer.current;
+    const video = videoPlayer.current;
+
+    audio?.addEventListener('timeupdate', handleTimeUpdate);
+    video?.addEventListener('timeupdate', handleTimeUpdate);
+
+    return () => {
+      audio?.removeEventListener('timeupdate', handleTimeUpdate);
+      video?.removeEventListener('timeupdate', handleTimeUpdate);
+    };
+  }, [onTimeUpdate]);
 
   const { onSeekReady } = props;
   useEffect(() => {

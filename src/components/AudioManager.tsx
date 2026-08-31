@@ -106,6 +106,7 @@ export function AudioManager(props: {
   onGenerateSummary?: () => void;
   transcriptChunks?: TranscriberData["chunks"];
   onSeekReady?: (seekTo: (time: number) => void) => void;
+  onTimeUpdate?: (time: number) => void;
 }) {
   const [isAudioProcessing, setIsAudioProcessing] = useState(false);
   const [audioReadyAnnouncement, setAudioReadyAnnouncement] = useState("");
@@ -423,6 +424,7 @@ export function AudioManager(props: {
             isTranscribing={props.transcriber.isBusy}
             transcriptChunks={props.transcriptChunks}
             onSeekReady={props.onSeekReady}
+            onTimeUpdate={props.onTimeUpdate}
           />
 
           <div className='relative w-full flex justify-center items-center mt-2 gap-3'>
@@ -479,6 +481,8 @@ export function ApplicationControls(props: {
   transcriber: Transcriber;
   isDark: boolean;
   onThemeToggle: () => void;
+  isAutoScrollEnabled: boolean;
+  setIsAutoScrollEnabled: (enabled: boolean) => void;
 }) {
   return (
     <>
@@ -516,7 +520,7 @@ export function ApplicationControls(props: {
           title={props.isDark ? 'Switch to light theme' : 'Switch to dark theme'}
           onClick={props.onThemeToggle}
         />
-        <SettingsTile transcriber={props.transcriber} icon={<SettingsIcon />} text='Settings' isApplicationControl />
+        <SettingsTile transcriber={props.transcriber} icon={<SettingsIcon />} text='Settings' isApplicationControl isAutoScrollEnabled={props.isAutoScrollEnabled} setIsAutoScrollEnabled={props.setIsAutoScrollEnabled} />
       </nav>
     </>
   );
@@ -558,6 +562,8 @@ function SettingsTile(props: {
   transcriber: Transcriber;
   text?: string;
   isApplicationControl?: boolean;
+  isAutoScrollEnabled: boolean;
+  setIsAutoScrollEnabled: (enabled: boolean) => void;
 }) {
   const [showModal, setShowModal] = useState(false);
 
@@ -581,6 +587,8 @@ function SettingsTile(props: {
         onSubmit={onSubmit}
         onClose={onClose}
         transcriber={props.transcriber}
+        isAutoScrollEnabled={props.isAutoScrollEnabled}
+        setIsAutoScrollEnabled={props.setIsAutoScrollEnabled}
       />
     </>
   );
@@ -591,6 +599,8 @@ function SettingsModal(props: {
   onSubmit: (url: string) => void;
   onClose: () => void;
   transcriber: Transcriber;
+  isAutoScrollEnabled: boolean;
+  setIsAutoScrollEnabled: (enabled: boolean) => void;
 }) {
   const names = Object.values(LANGUAGES).map(titleCase);
   const isParakeet = props.transcriber.model === "parakeet.wgsl";
