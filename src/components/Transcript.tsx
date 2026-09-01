@@ -551,7 +551,7 @@ export default function Transcript({
     if (activeIndex !== -1 && activeIndex !== activeChunkIndexRef.current) {
       activeChunkIndexRef.current = activeIndex;
 
-      if (isAutoScrollSettingEnabled && !autoScrollPaused && transcriptContainerRef.current && chunkRefs.current[activeIndex]) {
+      if (isAutoScrollSettingEnabled && !isEditing && !autoScrollPaused && transcriptContainerRef.current && chunkRefs.current[activeIndex]) {
         const container = transcriptContainerRef.current;
         const chunkElement = chunkRefs.current[activeIndex];
 
@@ -563,10 +563,10 @@ export default function Transcript({
         }
       }
     }
-  }, [currentTime, chunks, isAutoScrollSettingEnabled, autoScrollPaused]);
+  }, [currentTime, chunks, isAutoScrollSettingEnabled, autoScrollPaused, isEditing]);
 
   useEffect(() => {
-    if (!autoScrollPaused && isAutoScrollSettingEnabled && activeChunkIndexRef.current !== -1) {
+    if (!autoScrollPaused && isAutoScrollSettingEnabled && !isEditing && activeChunkIndexRef.current !== -1) {
       const container = transcriptContainerRef.current;
       const chunkElement = chunkRefs.current[activeChunkIndexRef.current];
 
@@ -577,7 +577,7 @@ export default function Transcript({
         container.scrollTo({ top: scrollTop, behavior: 'smooth' });
       }
     }
-  }, [autoScrollPaused, isAutoScrollSettingEnabled]);
+  }, [autoScrollPaused, isAutoScrollSettingEnabled, isEditing]);
 
   return (
     <div
