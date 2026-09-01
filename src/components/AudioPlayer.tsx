@@ -9,6 +9,7 @@ export default function AudioPlayer(props: {
   transcriptChunks?: { text: string; timestamp: [number, number | null] }[];
   onSeekReady?: (seekTo: (time: number) => void) => void;
   onTimeUpdate?: (time: number) => void;
+  playbackRate?: number;
 }) {
   const audioPlayer = useRef<HTMLAudioElement>(null);
   const videoPlayer = useRef<HTMLVideoElement>(null);
@@ -20,8 +21,19 @@ export default function AudioPlayer(props: {
     if (mediaPlayer && audioSource.current) {
       audioSource.current.src = props.audioUrl;
       mediaPlayer.load();
+      if (props.playbackRate) {
+        mediaPlayer.playbackRate = props.playbackRate;
+      }
     }
   }, [props.audioUrl]);
+
+  // Updates playback rate
+  useEffect(() => {
+    const mediaPlayer = audioPlayer.current ?? videoPlayer.current;
+    if (mediaPlayer && props.playbackRate) {
+      mediaPlayer.playbackRate = props.playbackRate;
+    }
+  }, [props.playbackRate]);
 
   const { onTimeUpdate } = props;
   useEffect(() => {

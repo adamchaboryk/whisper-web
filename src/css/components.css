@@ -484,3 +484,23 @@
     border-left-color: Highlight;
   }
 }
+/* Timestamp Pill */
+.timestamp-pill {
+  padding: 0.125rem 0.5rem;
+  border-radius: 9999px;
+  transition: background-color 150ms ease, color 150ms ease;
+  cursor: pointer;
+  outline: none;
+}
+
+.timestamp-pill:hover,
+.timestamp-pill:focus-visible {
+  background-color: #dbeafe;
+  color: #1d4ed8;
+}
+
+.dark .timestamp-pill:hover,
+.dark .timestamp-pill:focus-visible {
+  background-color: rgba(30, 58, 138, 0.5);
+  color: #93c5fd;
+}

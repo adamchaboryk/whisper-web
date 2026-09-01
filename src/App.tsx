@@ -24,6 +24,7 @@ function App() {
     const storedTheme = window.localStorage.getItem("whisper-web-theme");
     return storedTheme ? storedTheme === "dark" : window.matchMedia("(prefers-color-scheme: dark)").matches;
   });
+  const [playbackRate, setPlaybackRate] = useState(1);
 
   useEffect(() => {
     window.localStorage.setItem("whisper-web-autoscroll", isAutoScrollEnabled.toString());
@@ -125,6 +126,7 @@ function App() {
             transcriptChunks={previewChunks}
             onSeekReady={handleSeekReady}
             onTimeUpdate={setCurrentTime}
+            playbackRate={playbackRate}
           />
           <Transcript
             transcribedData={transcriber.output}
@@ -141,6 +143,8 @@ function App() {
             currentTime={currentTime}
             isAutoScrollSettingEnabled={isAutoScrollEnabled}
             setIsAutoScrollSettingEnabled={setIsAutoScrollEnabled}
+            playbackRate={playbackRate}
+            onPlaybackRateChange={setPlaybackRate}
           />
         </div>
       </main>

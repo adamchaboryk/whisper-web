@@ -106,6 +106,7 @@ export function AudioManager(props: {
   transcriptChunks?: TranscriberData["chunks"];
   onSeekReady?: (seekTo: (time: number) => void) => void;
   onTimeUpdate?: (time: number) => void;
+  playbackRate?: number;
 }) {
   const [isAudioProcessing, setIsAudioProcessing] = useState(false);
   const [audioReadyAnnouncement, setAudioReadyAnnouncement] = useState("");
@@ -463,6 +464,7 @@ export function AudioManager(props: {
               transcriptChunks={props.transcriptChunks}
               onSeekReady={props.onSeekReady}
               onTimeUpdate={props.onTimeUpdate}
+              playbackRate={props.playbackRate}
             />
 
             {audioData.isSampleVideo && (

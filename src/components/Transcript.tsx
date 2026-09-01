@@ -1,6 +1,7 @@
 import { useRef, useEffect, useLayoutEffect, useState, useMemo } from "react";
 import {
   FloatingArrow,
+  FloatingPortal,
   autoUpdate,
   arrow,
   flip,
@@ -31,6 +32,8 @@ interface Props {
   currentTime?: number;
   isAutoScrollSettingEnabled?: boolean;
   setIsAutoScrollSettingEnabled?: (enabled: boolean) => void;
+  playbackRate?: number;
+  onPlaybackRateChange?: (rate: number) => void;
 }
 
 function formatTranscriptionDuration(seconds: number): string {
@@ -227,6 +230,68 @@ function EditableTimestamp(props: {
   );
 }
 
+function TimestampButton(props: {
+  timestamp: number;
+  onClick: () => void;
+  onKeyDown: (event: React.KeyboardEvent<HTMLButtonElement>) => void;
+  tabIndex: number;
+  buttonRef?: (element: HTMLButtonElement | null) => void;
+}) {
+  const [isTooltipOpen, setIsTooltipOpen] = useState(false);
+  const arrowRef = useRef<SVGSVGElement>(null);
+  const { refs, floatingStyles, context } = useFloating({
+    open: isTooltipOpen,
+    onOpenChange: setIsTooltipOpen,
+    placement: "top",
+    // eslint-disable-next-line react-hooks/refs
+    middleware: [offset(10), flip(), shift({ padding: 8 }), arrow({ element: arrowRef })],
+    whileElementsMounted: autoUpdate,
+  });
+  const hover = useHover(context, { move: false, delay: { open: 800, close: 0, }, });
+  const focus = useFocus(context);
+  const { getReferenceProps, getFloatingProps } = useInteractions([hover, focus]);
+
+  return (
+    <>
+      <button
+        ref={(node) => {
+          refs.setReference(node);
+          if (props.buttonRef) {
+            props.buttonRef(node);
+          }
+        }}
+        type='button'
+        className='timestamp-pill mr-5 shrink-0 text-left tabular-nums'
+        onClick={props.onClick}
+        onKeyDown={props.onKeyDown}
+        tabIndex={props.tabIndex}
+        aria-label={`Play from ${formatAudioTimestamp(props.timestamp)}`}
+        {...getReferenceProps()}
+      >
+        {formatAudioTimestamp(props.timestamp)}
+      </button>
+      {isTooltipOpen && (
+        <FloatingPortal>
+          <span
+            // eslint-disable-next-line react-hooks/refs
+            ref={refs.setFloating}
+            style={floatingStyles}
+            className='z-20 whitespace-nowrap rounded bg-slate-900 px-2 py-1 text-xs font-medium text-white shadow-lg dark:bg-slate-100 dark:text-slate-900'
+            {...getFloatingProps({ role: "tooltip" })}
+          >
+            <FloatingArrow
+              ref={arrowRef}
+              context={context}
+              className='fill-slate-900 dark:fill-slate-100'
+            />
+            Play from here
+          </span>
+        </FloatingPortal>
+      )}
+    </>
+  );
+}
+
 function SaveButton(props: { onSave?: () => void; shortcut: string }) {
   const [isTooltipOpen, setIsTooltipOpen] = useState(false);
   const arrowRef = useRef<SVGSVGElement>(null);
@@ -239,7 +304,7 @@ function SaveButton(props: { onSave?: () => void; shortcut: string }) {
     middleware: [offset(10), flip(), shift({ padding: 8 }), arrow({ element: arrowRef })],
     whileElementsMounted: autoUpdate,
   });
-  const hover = useHover(context, { move: false, delay: { open: 500, close: 0 } });
+  const hover = useHover(context, { move: false, delay: { open: 800, close: 0 } });
   const focus = useFocus(context);
   const { getReferenceProps, getFloatingProps } = useInteractions([hover, focus]);
 
@@ -316,6 +381,8 @@ export default function Transcript({
   currentTime,
   isAutoScrollSettingEnabled = true,
   setIsAutoScrollSettingEnabled,
+  playbackRate = 1,
+  onPlaybackRateChange,
 }: Props) {
   const divRef = useRef<HTMLDivElement>(null);
   const timestampRefs = useRef<(HTMLButtonElement | null)[]>([]);
@@ -525,38 +592,58 @@ export default function Transcript({
       {transcribedData && !transcribedData.isBusy && transcribedData.chunks && (
         <>
           <div className='w-full flex items-center justify-between gap-3'>
-            <h2
-              className="text-lg font-semibold tracking-tight text-slate-900 dark:text-slate-100 sm:text-2xl"
-              tabIndex={-1}
-              id="transcript-complete"
-              ref={headingRef}
-            >
-              Transcript
-            </h2>
-            {isEditing ? (
-              <div className='flex items-center gap-3'>
-                <SaveButton onSave={onSaveEdits} shortcut={saveShortcut} />
-                <button
-                  type='button'
-                  className='inline-flex items-center justify-center gap-2 rounded-md border-2 border-solid bg-red-100 px-4 py-2 text-sm font-semibold text-red-900 hover:bg-red-200 focus:outline-none focus-visible:ring-2 focus-visible:ring-red-500 focus-visible:ring-offset-2 transition-all duration-300'
-                  onClick={onCancelEdits}
+            <div className='flex items-center gap-4'>
+              <h2
+                className="text-lg font-semibold tracking-tight text-slate-900 dark:text-slate-100 sm:text-2xl"
+                tabIndex={-1}
+                id="transcript-complete"
+                ref={headingRef}
+              >
+                Transcript
+              </h2>
+              {onPlaybackRateChange && (
+                <select
+                  className='form-select w-auto py-2 text-sm cursor-pointer'
+                  value={playbackRate}
+                  onChange={(e) => onPlaybackRateChange(Number(e.target.value))}
+                  title="Playback speed"
+                  aria-label="Playback speed"
                 >
-                  Cancel
+                  <option value={0.5}>0.5x</option>
+                  <option value={0.75}>0.75x</option>
+                  <option value={1}>1x</option>
+                  <option value={1.25}>1.25x</option>
+                  <option value={1.5}>1.5x</option>
+                  <option value={2}>2x</option>
+                </select>
+              )}
+            </div>
+            <div className='flex items-center gap-3'>
+              {isEditing ? (
+                <>
+                  <SaveButton onSave={onSaveEdits} shortcut={saveShortcut} />
+                  <button
+                    type='button'
+                    className='inline-flex items-center justify-center gap-2 rounded-md border-2 border-solid bg-red-100 px-4 py-2 text-sm font-semibold text-red-900 hover:bg-red-200 focus:outline-none focus-visible:ring-2 focus-visible:ring-red-500 focus-visible:ring-offset-2 transition-all duration-300'
+                    onClick={onCancelEdits}
+                  >
+                    Cancel
+                  </button>
+                </>
+              ) : (
+                <button type='button' className='export-button gap-1.5' onClick={onStartEditing}>
+                  <svg
+                    aria-hidden='true'
+                    viewBox='0 0 20 20'
+                    fill='currentColor'
+                    className='h-4 w-4'
+                  >
+                    <path d='m13.69 2.84 3.47 3.47-9.82 9.82-4.04.57.57-4.04 9.82-9.82Zm1.41-1.41a2 2 0 0 1 2.83 0l.64.64a2 2 0 0 1 0 2.83l-.71.71-3.47-3.47.71-.71Z' />
+                  </svg>
+                  Edit
                 </button>
-              </div>
-            ) : (
-              <button type='button' className='export-button gap-1.5' onClick={onStartEditing}>
-                <svg
-                  aria-hidden='true'
-                  viewBox='0 0 20 20'
-                  fill='currentColor'
-                  className='h-4 w-4'
-                >
-                  <path d='m13.69 2.84 3.47 3.47-9.82 9.82-4.04.57.57-4.04 9.82-9.82Zm1.41-1.41a2 2 0 0 1 2.83 0l.64.64a2 2 0 0 1 0 2.83l-.71.71-3.47-3.47.71-.71Z' />
-                </svg>
-                Edit
-              </button>
-            )}
+              )}
+            </div>
           </div>
 
           <div
@@ -609,10 +696,9 @@ export default function Transcript({
                       </>
                     ) : (
                       <>
-                        <button
-                          ref={(element) => { timestampRefs.current[i] = element; }}
-                          type='button'
-                          className='mr-5 shrink-0 text-left tabular-nums hover:text-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500 rounded dark:hover:text-blue-300'
+                        <TimestampButton
+                          buttonRef={(element) => { timestampRefs.current[i] = element; }}
+                          timestamp={chunk.timestamp[0]}
                           onClick={() => {
                             setAutoScrollPaused(false);
                             onSeekTo?.(chunk.timestamp[0]);
@@ -625,10 +711,7 @@ export default function Transcript({
                             }
                           }}
                           tabIndex={i > 0 ? -1 : 0}
-                          aria-label={`Play from ${formatAudioTimestamp(chunk.timestamp[0])}`}
-                        >
-                          {formatAudioTimestamp(chunk.timestamp[0])}
-                        </button>
+                        />
                         <div
                           className='flex-1 whitespace-pre-wrap'
                           dangerouslySetInnerHTML={{ __html: sanitizeHTML(chunk.text).trimStart() }}
