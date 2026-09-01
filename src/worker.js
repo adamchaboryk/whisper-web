@@ -37,63 +37,233 @@ const createCanonicalWav = (audio, sampleRate = 16000) => {
   return new Blob([buffer], { type: "audio/wav" });
 };
 
-const toCaptionChunks = (chunks) => {
-  const captionChunks = [];
-  const MAX_LINE_CHARACTERS = 42;
+const MAX_LINE_CHARACTERS = 42;
+const MAX_LINES_PER_EVENT = 2;
+const MIN_SUBTITLE_DURATION = 1.0;
+const TECHNICAL_FLOOR_DURATION = 0.2;
+const MAX_SUBTITLE_DURATION = 7.0;
+const INTER_SUBTITLE_GAP = 0.084;
+const TARGET_CPS = 16.0;
+const MAX_CPS = 20.0;
 
-  for (const chunk of chunks) {
-    const words = chunk.text.trim().split(/\s+/).filter(Boolean);
-    if (!words.length) continue;
+const CONJUNCTIONS = new Set([
+  "and", "but", "or", "nor", "for", "yet", "so",
+  "because", "although", "though", "while", "since",
+  "unless", "whereas", "which", "that", "who", "whom", "whose",
+  "when", "whenever", "where", "wherever", "if", "whether", "as"
+]);
 
-    const sourceStart = chunk.timestamp[0];
-    const sourceEnd = chunk.timestamp[1] ?? sourceStart;
-    const sourceDuration = sourceEnd - sourceStart;
-    const sourceLength = words.join(" ").length;
-    let currentText = "";
-    let currentStartOffset = 0;
+const PREPOSITIONS = new Set([
+  "in", "on", "at", "to", "from", "with", "by", "about",
+  "into", "through", "during", "before", "after", "above",
+  "below", "between", "under", "over", "of", "off", "out"
+]);
 
-    const pushChunk = (text, endOffset) => {
-      const start = sourceStart + (sourceDuration * currentStartOffset) / sourceLength;
-      const end = sourceStart + (sourceDuration * endOffset) / sourceLength;
-      captionChunks.push({
-        text,
-        timestamp: [start, end],
-      });
-      currentText = "";
-      currentStartOffset = endOffset + 1;
-    };
+const ARTICLES_AND_DETERMINERS = new Set([
+  "a", "an", "the", "this", "that", "these", "those"
+]);
 
-    for (const [wordIndex, word] of words.entries()) {
-      const candidate = currentText ? `${currentText} ${word}` : word;
-      const lineLengths = currentText.split("\n").map((line) => line.length);
-      const lineLength = lineLengths.at(-1) ?? 0;
-      const hasRoomOnCurrentLine = lineLength + (currentText ? 1 : 0) + word.length <= MAX_LINE_CHARACTERS;
-      const hasRoomForSecondLine = lineLengths.length < 2;
+const POSSESSIVES = new Set([
+  "my", "your", "his", "her", "its", "our", "their"
+]);
 
-      if (currentText && !hasRoomOnCurrentLine && !hasRoomForSecondLine) {
-        pushChunk(currentText, currentStartOffset + currentText.length - 1);
-      }
+const HONORIFICS = new Set([
+  "mr.", "mrs.", "ms.", "dr.", "prof.", "sr.", "jr.", "st."
+]);
 
-      if (!currentText) {
-        currentText = word;
-      } else if (hasRoomOnCurrentLine) {
-        currentText = candidate;
-      } else {
-        currentText = `${currentText}\n${word}`;
-      }
+const AUXILIARY_VERBS = new Set([
+  "is", "am", "are", "was", "were", "be", "been", "being",
+  "have", "has", "had", "do", "does", "did",
+  "will", "would", "shall", "should", "can", "could", "may", "might", "must"
+]);
 
-      if (/[.!?]$/.test(word)) {
-        const wordOffset = words.slice(0, wordIndex + 1).join(" ").length - 1;
-        pushChunk(currentText, wordOffset);
-      }
+const splitTextIntoPyramidLines = (text) => {
+  const clean = text.trim();
+  if (!clean) return "";
+  const words = clean.split(/\s+/).filter(Boolean);
+  if (words.length <= 1) return clean;
+
+  if (words.join(" ").length <= MAX_LINE_CHARACTERS) {
+    return clean;
+  }
+
+  let bestSplitIndex = -1;
+  let bestScore = -Infinity;
+
+  for (let i = 1; i < words.length; i++) {
+    const line1 = words.slice(0, i).join(" ");
+    const line2 = words.slice(i).join(" ");
+
+    const len1 = line1.length;
+    const len2 = line2.length;
+
+    if (len1 > MAX_LINE_CHARACTERS || len2 > MAX_LINE_CHARACTERS) {
+      continue;
     }
 
-    if (currentText) {
-      pushChunk(currentText, sourceLength - 1);
+    let score = 0;
+    if (len1 <= len2) {
+      score += 40;
+      const ratio = len1 / Math.max(1, len2);
+      if (ratio >= 0.6 && ratio <= 0.95) {
+        score += 25;
+      }
+    } else {
+      score -= (len1 - len2) * 4;
+    }
+
+    const prevWord = words[i - 1];
+    const prevWordLower = prevWord.toLowerCase().replace(/['"“”‘’]/g, "");
+    const nextWord = words[i];
+    const nextWordLower = nextWord.toLowerCase().replace(/['"“”‘’]/g, "");
+
+    if (/[.!?]["'”)]?$/.test(prevWord)) {
+      score += 100;
+    } else if (/[,;:\u2014-]["'”)]?$/.test(prevWord)) {
+      score += 70;
+    }
+
+    if (CONJUNCTIONS.has(nextWordLower)) score += 45;
+    if (PREPOSITIONS.has(nextWordLower)) score += 25;
+
+    if (ARTICLES_AND_DETERMINERS.has(prevWordLower)) score -= 80;
+    if (POSSESSIVES.has(prevWordLower)) score -= 60;
+    if (HONORIFICS.has(prevWordLower)) score -= 100;
+    if (AUXILIARY_VERBS.has(prevWordLower)) score -= 45;
+    if (prevWord.length === 1 && /[A-Z]/.test(prevWord)) score -= 80;
+
+    if (score > bestScore) {
+      bestScore = score;
+      bestSplitIndex = i;
     }
   }
 
-  return captionChunks;
+  if (bestSplitIndex !== -1) {
+    return `${words.slice(0, bestSplitIndex).join(" ")}\n${words.slice(bestSplitIndex).join(" ")}`;
+  }
+
+  let line1 = "";
+  let line2 = "";
+  for (const word of words) {
+    if (!line1 || `${line1} ${word}`.length <= MAX_LINE_CHARACTERS) {
+      line1 = line1 ? `${line1} ${word}` : word;
+    } else {
+      line2 = line2 ? `${line2} ${word}` : word;
+    }
+  }
+  return line2 ? `${line1}\n${line2}` : line1;
+};
+
+const toCaptionChunks = (chunks) => {
+  if (!chunks.length) return [];
+
+  const allWords = [];
+  for (const chunk of chunks) {
+    const chunkText = chunk.text.trim();
+    if (!chunkText) continue;
+
+    const words = chunkText.split(/\s+/).filter(Boolean);
+    if (!words.length) continue;
+
+    const sourceStart = chunk.timestamp[0];
+    const sourceEnd = chunk.timestamp[1] ?? (sourceStart + words.length * 0.4);
+    const sourceDuration = Math.max(0.2, sourceEnd - sourceStart);
+    const totalChars = words.join(" ").length;
+
+    let charOffset = 0;
+    for (const word of words) {
+      const wordStart = sourceStart + (sourceDuration * charOffset) / Math.max(1, totalChars);
+      charOffset += word.length;
+      const wordEnd = sourceStart + (sourceDuration * charOffset) / Math.max(1, totalChars);
+      charOffset += 1;
+      allWords.push({ word, start: wordStart, end: wordEnd });
+    }
+  }
+
+  if (!allWords.length) return [];
+
+  const rawEvents = [];
+  let currentWords = [];
+
+  const flushEvent = () => {
+    if (!currentWords.length) return;
+    const text = currentWords.map((w) => w.word).join(" ");
+    const start = currentWords[0].start;
+    const end = currentWords[currentWords.length - 1].end;
+    rawEvents.push({ text, start, end });
+    currentWords = [];
+  };
+
+  const MAX_EVENT_CHARS = MAX_LINE_CHARACTERS * MAX_LINES_PER_EVENT;
+
+  for (let i = 0; i < allWords.length; i++) {
+    const wordObj = allWords[i];
+    const candidateWords = [...currentWords, wordObj];
+    const candidateText = candidateWords.map((w) => w.word).join(" ");
+    const candidateLength = candidateText.length;
+    const candidateDuration = wordObj.end - (currentWords[0]?.start ?? wordObj.start);
+
+    const isTerminalPunctuation = /[.!?]["'”)]?$/.test(wordObj.word);
+    const isClausePunctuation = /[,;:\u2014-]["'”)]?$/.test(wordObj.word);
+
+    const exceedsLength = candidateLength > MAX_EVENT_CHARS;
+    const exceedsDuration = candidateDuration > MAX_SUBTITLE_DURATION;
+
+    if (currentWords.length > 0 && (exceedsLength || exceedsDuration)) {
+      flushEvent();
+      currentWords.push(wordObj);
+    } else {
+      currentWords.push(wordObj);
+    }
+
+    if (isTerminalPunctuation && candidateLength >= 20) {
+      flushEvent();
+    } else if (isClausePunctuation && candidateLength >= 45 && candidateDuration >= 3.0) {
+      flushEvent();
+    }
+  }
+  flushEvent();
+
+  const formattedEvents = [];
+  for (const ev of rawEvents) {
+    const pyramidText = splitTextIntoPyramidLines(ev.text);
+    const visibleLength = pyramidText.length;
+
+    const minReadingDuration = visibleLength / MAX_CPS;
+    const idealReadingDuration = visibleLength / TARGET_CPS;
+
+    let duration = ev.end - ev.start;
+    duration = Math.max(duration, MIN_SUBTITLE_DURATION, minReadingDuration);
+    duration = Math.max(duration, Math.min(idealReadingDuration, MAX_SUBTITLE_DURATION));
+    duration = Math.min(duration, MAX_SUBTITLE_DURATION);
+
+    formattedEvents.push({
+      text: pyramidText,
+      timestamp: [ev.start, ev.start + duration],
+    });
+  }
+
+  for (let i = 0; i < formattedEvents.length; i++) {
+    const current = formattedEvents[i];
+    const next = formattedEvents[i + 1];
+
+    if (next) {
+      const maxCurrentEnd = next.timestamp[0] - INTER_SUBTITLE_GAP;
+      if (current.timestamp[1] > maxCurrentEnd) {
+        if (maxCurrentEnd - current.timestamp[0] >= TECHNICAL_FLOOR_DURATION) {
+          current.timestamp[1] = Math.max(current.timestamp[0] + TECHNICAL_FLOOR_DURATION, maxCurrentEnd);
+        } else {
+          current.timestamp[1] = current.timestamp[0] + TECHNICAL_FLOOR_DURATION;
+          next.timestamp[0] = current.timestamp[1] + INTER_SUBTITLE_GAP;
+          if (next.timestamp[1] < next.timestamp[0] + TECHNICAL_FLOOR_DURATION) {
+            next.timestamp[1] = next.timestamp[0] + TECHNICAL_FLOOR_DURATION;
+          }
+        }
+      }
+    }
+  }
+
+  return formattedEvents;
 };
 
 const transcribeWithParakeet = async ({ audio, formatForCaptions, signal }) => {

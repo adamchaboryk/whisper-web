@@ -432,3 +432,55 @@
   border-top: none;
   box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.3), 0 2px 4px -1px rgba(0, 0, 0, 0.2);
 }
+
+/* Transcript Segment */
+.transcript-segment {
+  display: flex;
+  width: 100%;
+  flex-direction: row;
+  margin-bottom: 0.5rem;
+  padding: 1rem;
+  border-radius: 0.5rem;
+  border-left: 4px solid transparent;
+  background: var(--surface-muted);
+  box-shadow: 0 0 0 1px rgb(51 65 85 / 0.1), 0 20px 25px -5px rgb(0 0 0 / 0.05);
+  transition: all 150ms ease-out;
+}
+
+.dark .transcript-segment {
+  background: #334155;
+  box-shadow: 0 0 0 1px rgb(100 116 139 / 0.3), 0 20px 25px -5px rgb(0 0 0 / 0.05);
+}
+
+.transcript-segment.active-segment,
+.active-segment {
+  background: #dbeafe;
+  border-left-color: #1d4ed8;
+  box-shadow: 0 0 0 1px #93c5fd, 0 20px 25px -5px rgb(0 0 0 / 0.05);
+}
+
+.transcript-segment.active-segment button,
+.active-segment button {
+  font-weight: 700;
+  color: #1d4ed8;
+}
+
+.dark .transcript-segment.active-segment,
+.dark .active-segment {
+  background: rgb(30 58 138 / 0.4);
+  border-left-color: #60a5fa;
+  box-shadow: 0 0 0 1px #3b82f6, 0 20px 25px -5px rgb(0 0 0 / 0.05);
+}
+
+.dark .transcript-segment.active-segment button,
+.dark .active-segment button {
+  color: #93c5fd;
+}
+
+@media (forced-colors: active) {
+  .transcript-segment.active-segment,
+  .active-segment {
+    outline: 2px solid Highlight;
+    border-left-color: Highlight;
+  }
+}

@@ -22,8 +22,7 @@ import Constants, {
 } from "../utils/Constants";
 import { Transcriber, TranscriberData } from "../hooks/useTranscriber";
 import AudioRecorder from "./AudioRecorder";
-import { AnchorIcon, FolderIcon, MicrophoneIcon, SpeakerWaveIcon, InfoIcon, ThemeIcon, SettingsIcon } from '../utils/Icons';
-
+import { AnchorIcon, FolderIcon, MicrophoneIcon, SpeakerWaveIcon, VideoCameraIcon, InfoIcon, ThemeIcon, SettingsIcon } from '../utils/Icons';
 const INVALID_AUDIO_LINK = "INVALID_AUDIO_LINK";
 
 // Sites known to serve web pages (not direct audio files) at their URLs, which would
@@ -120,6 +119,7 @@ export function AudioManager(props: {
       url: string;
       source: AudioSource;
       mimeType: string;
+      isSampleVideo?: boolean;
     }
     | undefined
   >(undefined);
@@ -187,24 +187,43 @@ export function AudioManager(props: {
     }
   };
 
+  const sampleAudioUrl = useMemo(
+    () =>
+      new URL(
+        "test.wav",
+        `${window.location.origin}${import.meta.env.BASE_URL}`,
+      ).toString(),
+    [],
+  );
+
+  const sampleVideoUrl = useMemo(
+    () =>
+      new URL(
+        "sample-video.mp4",
+        `${window.location.origin}${import.meta.env.BASE_URL}`,
+      ).toString(),
+    [],
+  );
+
   const setAudioFromDownload = async (
     data: ArrayBuffer,
     mimeType: string,
+    isSampleVideo = false,
   ) => {
     const audioCTX = new AudioContext({
       sampleRate: Constants.SAMPLING_RATE,
     });
-    const blobUrl = URL.createObjectURL(
-      new Blob([data], { type: "audio/*" }),
-    );
-    const decoded = await audioCTX.decodeAudioData(data);
+    const blob = new Blob([data], { type: mimeType });
+    const blobUrl = URL.createObjectURL(blob);
+    const decoded = await audioCTX.decodeAudioData(data.slice(0));
     setAudioData({
       buffer: decoded,
-      blob: new Blob([data], { type: mimeType }),
-      sourceName: `source.${mimeType.split("/")[1]?.split(";")[0] || "wav"}`,
+      blob: blob,
+      sourceName: `source.${mimeType.split("/")[1]?.split(";")[0] || (mimeType.startsWith("video/") ? "webm" : "wav")}`,
       url: blobUrl,
       source: AudioSource.URL,
       mimeType: mimeType,
+      isSampleVideo,
     });
   };
 
@@ -254,9 +273,19 @@ export function AudioManager(props: {
           throw new Error(INVALID_AUDIO_LINK);
         }
         if (!mimeType || mimeType === "audio/wave") {
-          mimeType = "audio/wav";
+          if (url.endsWith(".webm")) {
+            mimeType = "video/webm";
+          } else if (url.endsWith(".mp4")) {
+            mimeType = "video/mp4";
+          } else {
+            mimeType = "audio/wav";
+          }
         }
-        await setAudioFromDownload(data, mimeType);
+        const isSampleVideo =
+          url === sampleVideoUrl ||
+          url.includes("sample-video.mp4") ||
+          url.includes("video-demo.webm");
+        await setAudioFromDownload(data, mimeType, isSampleVideo);
       } catch (error) {
         if (axios.isCancel(error)) {
           return;
@@ -268,7 +297,7 @@ export function AudioManager(props: {
         setIsAudioProcessing(false);
       }
     },
-    [],
+    [sampleVideoUrl],
   );
 
   useEffect(() => {
@@ -315,11 +344,6 @@ export function AudioManager(props: {
     [downloadAudioFromUrl],
   );
 
-  const sampleAudioUrl = new URL(
-    "test.wav",
-    `${window.location.origin}${import.meta.env.BASE_URL}`,
-  ).toString();
-
   return (
     <>
       <div className="relative flex flex-col items-center">
@@ -364,6 +388,7 @@ export function AudioManager(props: {
                     url: blobUrl,
                     source: AudioSource.FILE,
                     mimeType: mimeType,
+                    isSampleVideo: sourceName === "sample-video.mp4" || sourceName === "video-demo.webm",
                   });
                 }
               }}
@@ -390,14 +415,26 @@ export function AudioManager(props: {
         </div>
       </div>
 
-      <button
-        type='button'
-        className='demo'
-        onClick={() => handleUrlUpdate(sampleAudioUrl)}
-      >
-        <SpeakerWaveIcon className='w-4 h-4' />
-        Try sample audio
-      </button>
+      <div className='demo-container'>
+        Try
+        <button
+          type='button'
+          className='demo'
+          onClick={() => handleUrlUpdate(sampleAudioUrl)}
+        >
+          <SpeakerWaveIcon className='w-4 h-4' />
+          sample audio
+        </button>
+        <span>or</span>
+        <button
+          type='button'
+          className='demo'
+          onClick={() => handleUrlUpdate(sampleVideoUrl)}
+        >
+          <VideoCameraIcon className='w-4 h-4' />
+          sample video.
+        </button>
+      </div>
 
       <p className='sr-only' role='status' aria-live='polite' aria-atomic='true'>
         {audioReadyAnnouncement}
@@ -416,63 +453,82 @@ export function AudioManager(props: {
           {audioError}
         </div>
       )}
-      {audioData && (
-        <>
-          <AudioPlayer
-            audioUrl={audioData.url}
-            mimeType={audioData.mimeType}
-            isTranscribing={props.transcriber.isBusy}
-            transcriptChunks={props.transcriptChunks}
-            onSeekReady={props.onSeekReady}
-            onTimeUpdate={props.onTimeUpdate}
-          />
+      {
+        audioData && (
+          <>
+            <AudioPlayer
+              audioUrl={audioData.url}
+              mimeType={audioData.mimeType}
+              isTranscribing={props.transcriber.isBusy}
+              transcriptChunks={props.transcriptChunks}
+              onSeekReady={props.onSeekReady}
+              onTimeUpdate={props.onTimeUpdate}
+            />
 
-          <div className='relative w-full flex justify-center items-center mt-2 gap-3'>
-            {(!props.transcriber.output || props.transcriber.isBusy || isTranscriptLengthMismatched) && (
-              <TranscribeButton
-                ref={transcribeButtonRef}
-                onClick={handleTranscribeClick}
-                isModelLoading={props.transcriber.isModelLoading}
-                modelLoadingProgress={overallModelLoadProgress}
-                isTranscribing={props.transcriber.isBusy}
-                transcribingProgress={props.transcriber.output?.progress}
-              />
-            )}
-          </div>
-        </>
-      )}
-
-      {showWarningModal && (
-        <Modal
-          show={showWarningModal}
-          title="Download required"
-          content={
-            <div className="text-slate-700 dark:text-slate-300">
-              <p className="mb-4">
-                Transcription runs privately in your browser. Proceeding will save a {getModelSize(props.transcriber.model, props.transcriber.dtype)} model to your browser's temporary storage so it works offline. You can change models anytime in <em>Settings.</em>
+            {audioData.isSampleVideo && (
+              <p className='text-xs text-slate-500 dark:text-slate-400 text-center -mt-2 mb-2'>
+                (Video source:{" "}
+                <a
+                  href='https://svs.gsfc.nasa.gov/15089/'
+                  target='_blank'
+                  rel='noreferrer'
+                  className='text-blue-600 dark:text-blue-400 underline hover:no-underline'
+                >
+                  NASA
+                </a>
+                )
               </p>
-              {isMobileOrTablet && (
-                <p className="mb-4 text-sm bg-blue-50 dark:bg-blue-900/30 text-blue-800 dark:text-blue-200 p-3 rounded-md">
-                  <strong>⚠️ Mobile device detected:</strong> A lighter model was selected by default as it is less likely to crash due to hardware limits. Transcription may not be as accurate.
-                </p>
-              )}
-              {typeof navigator !== "undefined" && (navigator as unknown as { connection?: { type?: string } }).connection?.type === "cellular" && (
-                <p className="mt-4 font-semibold text-amber-600 dark:text-amber-500">
-                  ⚠️ It does not appear you are connected to Wi-Fi. Downloading the model over cellular data may incur charges.
-                </p>
+            )}
+
+            <div className='relative w-full flex justify-center items-center mt-2 gap-3'>
+              {(!props.transcriber.output || props.transcriber.isBusy || isTranscriptLengthMismatched) && (
+                <TranscribeButton
+                  ref={transcribeButtonRef}
+                  onClick={handleTranscribeClick}
+                  isModelLoading={props.transcriber.isModelLoading}
+                  modelLoadingProgress={overallModelLoadProgress}
+                  isTranscribing={props.transcriber.isBusy}
+                  transcribingProgress={props.transcriber.output?.progress}
+                />
               )}
             </div>
-          }
-          onClose={() => setShowWarningModal(false)}
-          submitText="Proceed"
-          submitEnabled={true}
-          onSubmit={() => {
-            localStorage.setItem("hasAcceptedTranscriptionWarning", "true");
-            setShowWarningModal(false);
-            startTranscription();
-          }}
-        />
-      )}
+          </>
+        )
+      }
+
+      {
+        showWarningModal && (
+          <Modal
+            show={showWarningModal}
+            title="Download required"
+            content={
+              <div className="text-slate-700 dark:text-slate-300">
+                <p className="mb-4">
+                  Transcription runs privately in your browser. Proceeding will save a {getModelSize(props.transcriber.model, props.transcriber.dtype)} model to your browser's temporary storage so it works offline. You can change models anytime in <em>Settings.</em>
+                </p>
+                {isMobileOrTablet && (
+                  <p className="mb-4 text-sm bg-blue-50 dark:bg-blue-900/30 text-blue-800 dark:text-blue-200 p-3 rounded-md">
+                    <strong>⚠️ Mobile device detected:</strong> A lighter model was selected by default as it is less likely to crash due to hardware limits. Transcription may not be as accurate.
+                  </p>
+                )}
+                {typeof navigator !== "undefined" && (navigator as unknown as { connection?: { type?: string } }).connection?.type === "cellular" && (
+                  <p className="mt-4 font-semibold text-amber-600 dark:text-amber-500">
+                    ⚠️ It does not appear you are connected to Wi-Fi. Downloading the model over cellular data may incur charges.
+                  </p>
+                )}
+              </div>
+            }
+            onClose={() => setShowWarningModal(false)}
+            submitText="Proceed"
+            submitEnabled={true}
+            onSubmit={() => {
+              localStorage.setItem("hasAcceptedTranscriptionWarning", "true");
+              setShowWarningModal(false);
+              startTranscription();
+            }}
+          />
+        )
+      }
     </>
   );
 }

@@ -1,4 +1,4 @@
-import { useRef, useEffect, useLayoutEffect, useState } from "react";
+import { useRef, useEffect, useLayoutEffect, useState, useMemo } from "react";
 import {
   FloatingArrow,
   autoUpdate,
@@ -319,7 +319,10 @@ export default function Transcript({
 }: Props) {
   const divRef = useRef<HTMLDivElement>(null);
   const timestampRefs = useRef<(HTMLButtonElement | null)[]>([]);
-  const chunks = editedChunks ?? transcribedData?.chunks ?? [];
+  const chunks = useMemo(
+    () => editedChunks ?? transcribedData?.chunks ?? [],
+    [editedChunks, transcribedData?.chunks],
+  );
   const saveShortcut = /Mac|iPhone|iPad|iPod/.test(navigator.userAgent) ? "Command + S" : "Ctrl + S";
 
   const saveBlob = (blob: Blob, filename: string) => {
@@ -587,8 +590,8 @@ export default function Transcript({
                   <div
                     key={`${transcribedData.text}-${i}`}
                     ref={(el) => { chunkRefs.current[i] = el; }}
-                    className={`w-full flex flex-row mb-2 rounded-lg p-4 shadow-xl shadow-black/5 ring-1 ring-slate-700/10 dark:ring-slate-500/30 transition-all duration-150 ease-out ${isActive ? "bg-blue-100 dark:bg-blue-900/40" : "bg-slate-50 dark:bg-slate-700"
-                      }`}
+                    className={`transcript-segment ${isActive ? "active-segment" : ""}`}
+                    aria-current={isActive ? "true" : undefined}
                   >
                     {isEditing ? (
                       <>
