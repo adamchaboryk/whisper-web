@@ -22,7 +22,7 @@ import Constants, {
 } from "../utils/Constants";
 import { Transcriber, TranscriberData } from "../hooks/useTranscriber";
 import AudioRecorder from "./AudioRecorder";
-import { AnchorIcon, FolderIcon, MicrophoneIcon, SpeakerWaveIcon, VideoCameraIcon, InfoIcon, ThemeIcon, SettingsIcon } from '../utils/Icons';
+import { AnchorIcon, FolderIcon, MicrophoneIcon, InfoIcon, ThemeIcon, SettingsIcon } from '../utils/Icons';
 const INVALID_AUDIO_LINK = "INVALID_AUDIO_LINK";
 
 // Sites known to serve web pages (not direct audio files) at their URLs, which would
@@ -423,7 +423,6 @@ export function AudioManager(props: {
           className='demo'
           onClick={() => handleUrlUpdate(sampleAudioUrl)}
         >
-          <SpeakerWaveIcon className='w-4 h-4' />
           sample audio
         </button>
         <span>or</span>
@@ -432,7 +431,6 @@ export function AudioManager(props: {
           className='demo'
           onClick={() => handleUrlUpdate(sampleVideoUrl)}
         >
-          <VideoCameraIcon className='w-4 h-4' />
           sample video.
         </button>
       </div>

@@ -354,6 +354,64 @@ function SaveButton(props: { onSave?: () => void; shortcut: string }) {
   );
 }
 
+function PlaybackSpeedSelect(props: {
+  playbackRate: number;
+  onPlaybackRateChange: (rate: number) => void;
+}) {
+  const [isTooltipOpen, setIsTooltipOpen] = useState(false);
+  const arrowRef = useRef<SVGSVGElement>(null);
+  const { refs, floatingStyles, context } = useFloating({
+    open: isTooltipOpen,
+    onOpenChange: setIsTooltipOpen,
+    placement: "top",
+    // eslint-disable-next-line react-hooks/refs
+    middleware: [offset(10), flip(), shift({ padding: 8 }), arrow({ element: arrowRef })],
+    whileElementsMounted: autoUpdate,
+  });
+  const hover = useHover(context, { move: false, delay: { open: 800, close: 0 } });
+  const focus = useFocus(context);
+  const { getReferenceProps, getFloatingProps } = useInteractions([hover, focus]);
+
+  return (
+    <>
+      <select
+        ref={refs.setReference}
+        className='form-select w-auto py-2 text-sm cursor-pointer'
+        value={props.playbackRate}
+        id="playback"
+        onChange={(e) => props.onPlaybackRateChange(Number(e.target.value))}
+        aria-label="Playback speed"
+        {...getReferenceProps()}
+      >
+        <option value={0.5}>0.5x</option>
+        <option value={0.75}>0.75x</option>
+        <option value={1}>1x</option>
+        <option value={1.25}>1.25x</option>
+        <option value={1.5}>1.5x</option>
+        <option value={2}>2x</option>
+      </select>
+      {isTooltipOpen && (
+        <FloatingPortal>
+          <span
+            // eslint-disable-next-line react-hooks/refs
+            ref={refs.setFloating}
+            style={floatingStyles}
+            className='z-20 whitespace-nowrap rounded bg-slate-900 px-2 py-1 text-xs font-medium text-white shadow-lg dark:bg-slate-100 dark:text-slate-900'
+            {...getFloatingProps({ role: "tooltip" })}
+          >
+            <FloatingArrow
+              ref={arrowRef}
+              context={context}
+              className='fill-slate-900 dark:fill-slate-100'
+            />
+            Playback speed
+          </span>
+        </FloatingPortal>
+      )}
+    </>
+  );
+}
+
 const extractPlainText = (html: string) => {
   const tmp = document.createElement("div");
   tmp.innerHTML = html;
@@ -602,20 +660,10 @@ export default function Transcript({
                 Transcript
               </h2>
               {onPlaybackRateChange && (
-                <select
-                  className='form-select w-auto py-2 text-sm cursor-pointer'
-                  value={playbackRate}
-                  onChange={(e) => onPlaybackRateChange(Number(e.target.value))}
-                  title="Playback speed"
-                  aria-label="Playback speed"
-                >
-                  <option value={0.5}>0.5x</option>
-                  <option value={0.75}>0.75x</option>
-                  <option value={1}>1x</option>
-                  <option value={1.25}>1.25x</option>
-                  <option value={1.5}>1.5x</option>
-                  <option value={2}>2x</option>
-                </select>
+                <PlaybackSpeedSelect
+                  playbackRate={playbackRate}
+                  onPlaybackRateChange={onPlaybackRateChange}
+                />
               )}
             </div>
             <div className='flex items-center gap-3'>
