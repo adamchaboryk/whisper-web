@@ -376,7 +376,7 @@ function PlaybackSpeedSelect(props: {
     <>
       <select
         ref={refs.setReference}
-        className='form-select w-auto py-2 text-sm cursor-pointer'
+        className='form-select w-auto py-2 cursor-pointer'
         value={props.playbackRate}
         id="playback"
         onChange={(e) => props.onPlaybackRateChange(Number(e.target.value))}

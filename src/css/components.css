@@ -168,7 +168,7 @@
   border-radius: 0.5rem;
   background: var(--surface-muted);
   color: var(--text);
-  padding: 0.625rem;
+  padding: 0.4rem 0.625rem;
 }
 
 .form-select {
@@ -206,9 +206,8 @@
 
 .form-select:focus,
 .url-input:focus {
-  border-color: var(--focus);
-  box-shadow: 0 0 0 3px rgb(147 197 253 / 0.5);
-  outline: 2px solid transparent;
+  outline: 2px solid var(--focus);
+  outline-offset: 3px;
 }
 
 .form-select:disabled {
@@ -478,12 +477,14 @@
 }
 
 @media (forced-colors: active) {
+
   .transcript-segment.active-segment,
   .active-segment {
     outline: 2px solid Highlight;
     border-left-color: Highlight;
   }
 }
+
 /* Timestamp Pill */
 .timestamp-pill {
   padding: 0.125rem 0.5rem;
