@@ -25,7 +25,7 @@ export default function AudioPlayer(props: {
         mediaPlayer.playbackRate = props.playbackRate;
       }
     }
-  }, [props.audioUrl]);
+  }, [props.audioUrl, props.playbackRate]);
 
   // Updates playback rate
   useEffect(() => {

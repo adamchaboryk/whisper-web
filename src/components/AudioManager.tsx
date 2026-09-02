@@ -129,6 +129,22 @@ export function AudioManager(props: {
   const [showWarningModal, setShowWarningModal] = useState(false);
   const [isHoveringFile, setIsHoveringFile] = useState(false);
 
+  const checkAndResetIfMismatched = useCallback(
+    (audioDuration: number) => {
+      const chunks = props.transcriptChunks;
+      if (!chunks?.length || !audioDuration) return;
+
+      const lastChunk = chunks[chunks.length - 1];
+      const transcriptDuration = lastChunk.timestamp[1] ?? lastChunk.timestamp[0] ?? 0;
+      const diff = Math.abs(transcriptDuration - audioDuration);
+
+      if (diff > Math.max(10, audioDuration * 0.1)) {
+        props.transcriber.onInputChange();
+      }
+    },
+    [props.transcriptChunks, props.transcriber],
+  );
+
   const startTranscription = useCallback(() => {
     if (audioData) {
       props.transcriber.start(
@@ -148,7 +164,6 @@ export function AudioManager(props: {
     }
   }, [startTranscription]);
 
-  // Combine all in-flight model file downloads into a single byte-weighted percentage.
   const isTranscriptLengthMismatched = useMemo(() => {
     if (!props.transcriptChunks?.length || !audioData?.buffer?.duration) return false;
 
@@ -162,6 +177,7 @@ export function AudioManager(props: {
     return diff > Math.max(10, audioDuration * 0.1);
   }, [props.transcriptChunks, audioData]);
 
+  // Combine all in-flight model file downloads into a single byte-weighted percentage.
   const overallModelLoadProgress = useMemo(() => {
     const items = props.transcriber.progressItems;
     if (items.length === 0) {
@@ -206,27 +222,31 @@ export function AudioManager(props: {
     [],
   );
 
-  const setAudioFromDownload = async (
-    data: ArrayBuffer,
-    mimeType: string,
-    isSampleVideo = false,
-  ) => {
-    const audioCTX = new AudioContext({
-      sampleRate: Constants.SAMPLING_RATE,
-    });
-    const blob = new Blob([data], { type: mimeType });
-    const blobUrl = URL.createObjectURL(blob);
-    const decoded = await audioCTX.decodeAudioData(data.slice(0));
-    setAudioData({
-      buffer: decoded,
-      blob: blob,
-      sourceName: `source.${mimeType.split("/")[1]?.split(";")[0] || (mimeType.startsWith("video/") ? "webm" : "wav")}`,
-      url: blobUrl,
-      source: AudioSource.URL,
-      mimeType: mimeType,
-      isSampleVideo,
-    });
-  };
+  const setAudioFromDownload = useCallback(
+    async (
+      data: ArrayBuffer,
+      mimeType: string,
+      isSampleVideo = false,
+    ) => {
+      const audioCTX = new AudioContext({
+        sampleRate: Constants.SAMPLING_RATE,
+      });
+      const blob = new Blob([data], { type: mimeType });
+      const blobUrl = URL.createObjectURL(blob);
+      const decoded = await audioCTX.decodeAudioData(data.slice(0));
+      checkAndResetIfMismatched(decoded.duration);
+      setAudioData({
+        buffer: decoded,
+        blob: blob,
+        sourceName: `source.${mimeType.split("/")[1]?.split(";")[0] || (mimeType.startsWith("video/") ? "webm" : "wav")}`,
+        url: blobUrl,
+        source: AudioSource.URL,
+        mimeType: mimeType,
+        isSampleVideo,
+      });
+    },
+    [checkAndResetIfMismatched],
+  );
 
   const setAudioFromRecording = async (data: Blob) => {
     resetAudio();
@@ -238,6 +258,7 @@ export function AudioManager(props: {
       });
       const arrayBuffer = fileReader.result as ArrayBuffer;
       const decoded = await audioCTX.decodeAudioData(arrayBuffer);
+      checkAndResetIfMismatched(decoded.duration);
       setAudioData({
         buffer: decoded,
         blob: data,
@@ -298,7 +319,7 @@ export function AudioManager(props: {
         setIsAudioProcessing(false);
       }
     },
-    [sampleVideoUrl],
+    [sampleVideoUrl, setAudioFromDownload],
   );
 
   useEffect(() => {
@@ -382,6 +403,7 @@ export function AudioManager(props: {
                   });
                   setAudioData(undefined); // No audio to play
                 } else if (decoded) {
+                  checkAndResetIfMismatched(decoded.duration);
                   setAudioData({
                     buffer: decoded,
                     blob,

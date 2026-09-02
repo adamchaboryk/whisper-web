@@ -273,7 +273,6 @@ function TimestampButton(props: {
       {isTooltipOpen && (
         <FloatingPortal>
           <span
-            // eslint-disable-next-line react-hooks/refs
             ref={refs.setFloating}
             style={floatingStyles}
             className='z-20 whitespace-nowrap rounded bg-slate-900 px-2 py-1 text-xs font-medium text-white shadow-lg dark:bg-slate-100 dark:text-slate-900'
