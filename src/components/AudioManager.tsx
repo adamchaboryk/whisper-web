@@ -24,6 +24,10 @@ import { Transcriber, TranscriberData } from "../hooks/useTranscriber";
 import AudioRecorder from "./AudioRecorder";
 import { AnchorIcon, FolderIcon, MicrophoneIcon, InfoIcon, ThemeIcon, SettingsIcon } from '../utils/Icons';
 const INVALID_AUDIO_LINK = "INVALID_AUDIO_LINK";
+const INVALID_URL_SCHEME = "INVALID_URL_SCHEME";
+const INVALID_URL_FORMAT = "INVALID_URL_FORMAT";
+const FILE_TOO_LARGE = "FILE_TOO_LARGE";
+const MAX_AUDIO_DOWNLOAD_BYTES = 500 * 1024 * 1024; // 500 MB
 
 // Sites known to serve web pages (not direct audio files) at their URLs, which would
 // otherwise surface as a confusing CORS/network error instead of an explanation.
@@ -40,20 +44,57 @@ const NON_AUDIO_HOSTNAMES = [
   "spotify.com",
 ];
 
-function isKnownNonAudioLink(url: string): boolean {
+function isValidHttpUrl(rawUrl: string): boolean {
   try {
-    const hostname = new URL(url).hostname.replace(/^www\./, "").toLowerCase();
-    return NON_AUDIO_HOSTNAMES.some(
-      (domain) => hostname === domain || hostname.endsWith(`.${domain}`),
-    );
+    const parsed = new URL(rawUrl.trim());
+    return parsed.protocol === "http:" || parsed.protocol === "https:";
   } catch {
     return false;
   }
 }
 
+function validateAudioUrl(rawUrl: string): URL {
+  const trimmed = rawUrl.trim();
+  if (!trimmed) {
+    throw new Error(INVALID_URL_FORMAT);
+  }
+
+  let parsedUrl: URL;
+  try {
+    parsedUrl = new URL(trimmed);
+  } catch {
+    throw new Error(INVALID_URL_FORMAT);
+  }
+
+  // Only allow HTTP and HTTPS protocols
+  if (parsedUrl.protocol !== "http:" && parsedUrl.protocol !== "https:") {
+    throw new Error(INVALID_URL_SCHEME);
+  }
+
+  return parsedUrl;
+}
+
+function isKnownNonAudioLink(parsedUrl: URL): boolean {
+  const hostname = parsedUrl.hostname.replace(/^www\./, "").toLowerCase();
+  return NON_AUDIO_HOSTNAMES.some(
+    (domain) => hostname === domain || hostname.endsWith(`.${domain}`),
+  );
+}
+
 function getAudioUrlErrorMessage(error: unknown): string {
-  if (error instanceof Error && error.message === INVALID_AUDIO_LINK) {
-    return "That link doesn't point to a direct audio file (e.g., YouTube and other video site links aren't supported). Please use a direct link to an audio file, such as one ending in .mp3 or .wav.";
+  if (error instanceof Error) {
+    if (error.message === FILE_TOO_LARGE) {
+      return "The audio file exceeds the maximum allowed download size (500 MB). Please use a smaller file or extract the audio track first.";
+    }
+    if (error.message === INVALID_AUDIO_LINK) {
+      return "That link doesn't point to a direct audio file (e.g., YouTube and other video site links aren't supported). Please use a direct link to an audio file, such as one ending in .mp3 or .wav.";
+    }
+    if (error.message === INVALID_URL_SCHEME) {
+      return "Only HTTP and HTTPS URLs are supported (e.g., https://example.com/audio.mp3).";
+    }
+    if (error.message === INVALID_URL_FORMAT) {
+      return "Please enter a valid, complete URL including http:// or https:// (e.g., https://example.com/audio.mp3).";
+    }
   }
 
   if (error instanceof DOMException) {
@@ -79,6 +120,17 @@ function titleCase(str: string) {
       return word.charAt(0).toUpperCase() + word.slice(1);
     })
     .join("");
+}
+
+async function decodeAudioBuffer(arrayBuffer: ArrayBuffer): Promise<AudioBuffer> {
+  const audioCTX = new AudioContext({
+    sampleRate: Constants.SAMPLING_RATE,
+  });
+  try {
+    return await audioCTX.decodeAudioData(arrayBuffer);
+  } finally {
+    void audioCTX.close().catch(() => undefined);
+  }
 }
 
 function getModelSize(model: string, dtype: string): string {
@@ -124,6 +176,15 @@ export function AudioManager(props: {
     }
     | undefined
   >(undefined);
+
+  // Automatically revoke previous object URLs when audioData changes or component unmounts
+  useEffect(() => {
+    return () => {
+      if (audioData?.url && audioData.url.startsWith("blob:")) {
+        URL.revokeObjectURL(audioData.url);
+      }
+    };
+  }, [audioData]);
   const requestAbortControllerRef = useRef<AbortController | null>(null);
 
   const [showWarningModal, setShowWarningModal] = useState(false);
@@ -228,22 +289,24 @@ export function AudioManager(props: {
       mimeType: string,
       isSampleVideo = false,
     ) => {
-      const audioCTX = new AudioContext({
-        sampleRate: Constants.SAMPLING_RATE,
-      });
       const blob = new Blob([data], { type: mimeType });
       const blobUrl = URL.createObjectURL(blob);
-      const decoded = await audioCTX.decodeAudioData(data.slice(0));
-      checkAndResetIfMismatched(decoded.duration);
-      setAudioData({
-        buffer: decoded,
-        blob: blob,
-        sourceName: `source.${mimeType.split("/")[1]?.split(";")[0] || (mimeType.startsWith("video/") ? "webm" : "wav")}`,
-        url: blobUrl,
-        source: AudioSource.URL,
-        mimeType: mimeType,
-        isSampleVideo,
-      });
+      try {
+        const decoded = await decodeAudioBuffer(data.slice(0));
+        checkAndResetIfMismatched(decoded.duration);
+        setAudioData({
+          buffer: decoded,
+          blob: blob,
+          sourceName: `source.${mimeType.split("/")[1]?.split(";")[0] || (mimeType.startsWith("video/") ? "webm" : "wav")}`,
+          url: blobUrl,
+          source: AudioSource.URL,
+          mimeType: mimeType,
+          isSampleVideo,
+        });
+      } catch (error) {
+        URL.revokeObjectURL(blobUrl);
+        throw error;
+      }
     },
     [checkAndResetIfMismatched],
   );
@@ -253,62 +316,92 @@ export function AudioManager(props: {
     const blobUrl = URL.createObjectURL(data);
     const fileReader = new FileReader();
     fileReader.onloadend = async () => {
-      const audioCTX = new AudioContext({
-        sampleRate: Constants.SAMPLING_RATE,
-      });
-      const arrayBuffer = fileReader.result as ArrayBuffer;
-      const decoded = await audioCTX.decodeAudioData(arrayBuffer);
-      checkAndResetIfMismatched(decoded.duration);
-      setAudioData({
-        buffer: decoded,
-        blob: data,
-        sourceName: `recording.${data.type.split("/")[1]?.split(";")[0] || "webm"}`,
-        url: blobUrl,
-        source: AudioSource.RECORDING,
-        mimeType: data.type,
-      });
+      try {
+        const arrayBuffer = fileReader.result as ArrayBuffer;
+        const decoded = await decodeAudioBuffer(arrayBuffer);
+        checkAndResetIfMismatched(decoded.duration);
+        setAudioData({
+          buffer: decoded,
+          blob: data,
+          sourceName: `recording.${data.type.split("/")[1]?.split(";")[0] || "webm"}`,
+          url: blobUrl,
+          source: AudioSource.RECORDING,
+          mimeType: data.type,
+        });
+      } catch (error) {
+        URL.revokeObjectURL(blobUrl);
+        console.error("Failed to decode recording:", error);
+        setAudioError("Failed to decode the microphone recording.");
+      }
+    };
+    fileReader.onerror = () => {
+      URL.revokeObjectURL(blobUrl);
+      setAudioError("Failed to process the recording data.");
     };
     fileReader.readAsArrayBuffer(data);
   };
 
   const downloadAudioFromUrl = useCallback(
     async (requestAbortController: AbortController, url: string) => {
+      let isSizeExceeded = false;
       try {
         setAudioData(undefined);
         setAudioError(null);
         setIsAudioProcessing(true);
 
-        if (isKnownNonAudioLink(url)) {
+        const parsedUrl = validateAudioUrl(url);
+
+        if (isKnownNonAudioLink(parsedUrl)) {
           throw new Error(INVALID_AUDIO_LINK);
         }
 
-        const { data, headers } = (await axios.get(url, {
+        const { data, headers } = (await axios.get(parsedUrl.href, {
           signal: requestAbortController.signal,
           responseType: "arraybuffer",
+          onDownloadProgress: (progressEvent) => {
+            if (progressEvent.loaded > MAX_AUDIO_DOWNLOAD_BYTES) {
+              isSizeExceeded = true;
+              requestAbortController.abort();
+            }
+          },
         })) as {
           data: ArrayBuffer;
-          headers: { "content-type": string };
+          headers: { "content-type": string; "content-length"?: string };
         };
+
+        const contentLength = Number(headers["content-length"]);
+        if (contentLength && contentLength > MAX_AUDIO_DOWNLOAD_BYTES) {
+          throw new Error(FILE_TOO_LARGE);
+        }
+        if (data.byteLength > MAX_AUDIO_DOWNLOAD_BYTES) {
+          throw new Error(FILE_TOO_LARGE);
+        }
 
         let mimeType = headers["content-type"];
         if (mimeType && mimeType.startsWith("text/html")) {
           throw new Error(INVALID_AUDIO_LINK);
         }
         if (!mimeType || mimeType === "audio/wave") {
-          if (url.endsWith(".webm")) {
+          const pathname = parsedUrl.pathname.toLowerCase();
+          if (pathname.endsWith(".webm")) {
             mimeType = "video/webm";
-          } else if (url.endsWith(".mp4")) {
+          } else if (pathname.endsWith(".mp4")) {
             mimeType = "video/mp4";
           } else {
             mimeType = "audio/wav";
           }
         }
         const isSampleVideo =
-          url === sampleVideoUrl ||
-          url.includes("sample-video.mp4") ||
-          url.includes("video-demo.webm");
+          parsedUrl.href === sampleVideoUrl ||
+          parsedUrl.pathname.includes("sample-video.mp4") ||
+          parsedUrl.pathname.includes("video-demo.webm");
         await setAudioFromDownload(data, mimeType, isSampleVideo);
       } catch (error) {
+        if (isSizeExceeded) {
+          setAudioError(getAudioUrlErrorMessage(new Error(FILE_TOO_LARGE)));
+          return;
+        }
+
         if (axios.isCancel(error)) {
           return;
         }
@@ -386,6 +479,14 @@ export function AudioManager(props: {
               onFocus={() => setIsHoveringFile(true)}
               onBlur={() => setIsHoveringFile(false)}
               onProcessingChange={setIsAudioProcessing}
+              onFileError={(error) => {
+                console.error("Failed to load file:", error);
+                setAudioError(
+                  error instanceof DOMException && error.name === "QuotaExceededError"
+                    ? "The file is too large for the browser's available memory. Try extracting the audio track (e.g. to MP3 or WAV) first."
+                    : "The file could not be decoded as audio. Please check that it is a supported audio or video format."
+                );
+              }}
               onFileUpdate={async (decoded, blob, sourceName, blobUrl, mimeType) => {
                 setAudioError(null);
 
@@ -514,6 +615,47 @@ export function AudioManager(props: {
                 />
               )}
             </div>
+
+            {props.transcriber.errorMessage && (
+              <div
+                role='alert'
+                aria-live='assertive'
+                className='w-full max-w-xl mx-auto mt-4 p-4 flex items-start justify-between gap-3 text-sm font-medium text-red-900 bg-red-50 border border-red-200 rounded-xl dark:bg-red-950/70 dark:text-red-200 dark:border-red-800 shadow-sm'
+              >
+                <div className='flex items-start gap-3 min-w-0'>
+                  <svg
+                    className='w-5 h-5 shrink-0 text-red-600 dark:text-red-400 mt-0.5'
+                    fill='none'
+                    stroke='currentColor'
+                    viewBox='0 0 24 24'
+                    aria-hidden='true'
+                  >
+                    <path
+                      strokeLinecap='round'
+                      strokeLinejoin='round'
+                      strokeWidth={2}
+                      d='M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z'
+                    />
+                  </svg>
+                  <div className='min-w-0 flex-1'>
+                    <p className='font-semibold text-red-950 dark:text-red-100'>Transcription failed</p>
+                    <p className='mt-0.5 text-red-800 dark:text-red-300 font-normal break-words'>
+                      {props.transcriber.errorMessage}
+                    </p>
+                  </div>
+                </div>
+                <button
+                  type='button'
+                  onClick={() => props.transcriber.setErrorMessage(undefined)}
+                  aria-label='Dismiss error'
+                  className='inline-flex shrink-0 p-1.5 rounded-lg text-red-700 hover:bg-red-200/50 dark:text-red-300 dark:hover:bg-red-900/50 focus:outline-none focus-visible:ring-2 focus-visible:ring-red-500 transition-colors'
+                >
+                  <svg className='w-4 h-4' fill='none' stroke='currentColor' viewBox='0 0 24 24' aria-hidden='true'>
+                    <path strokeLinecap='round' strokeLinejoin='round' strokeWidth={2} d='M6 18L18 6M6 6l12 12' />
+                  </svg>
+                </button>
+              </div>
+            )}
           </>
         )
       }
@@ -584,10 +726,10 @@ export function ApplicationControls(props: {
             <h3>Acknowledgements</h3>
             <p>Maintained by Adam Chaboryk, Digital Media Projects, Computing and Communications Services at Toronto Metropolitan University.</p>
 
-            <p>This tool is a customized fork of <a href='https://huggingface.co/Xenova'>Joshua Lochner's Whisper Web project.</a> This project also incorporates <a href="https://github.com/narcotic-sh/parakeet.wgsl">Hamza Qayyum's parakeet.wgsl project.</a></p>
+            <p>This tool is a customized fork of <a href='https://huggingface.co/Xenova' target='_blank' rel='noopener noreferrer'>Joshua Lochner's Whisper Web project.</a> This project also incorporates <a href="https://github.com/narcotic-sh/parakeet.wgsl" target='_blank' rel='noopener noreferrer'>Hamza Qayyum's parakeet.wgsl project.</a></p>
 
             <h3>Open source</h3>
-            <p>Email feedback to <a href='mailto:adam.chaboryk@torontomu.ca'>adam.chaboryk@torontomu.ca</a> or view <a href="https://github.com/adamchaboryk/whisper-web">source code on GitHub.</a></p>
+            <p>Email feedback to <a href='mailto:adam.chaboryk@torontomu.ca'>adam.chaboryk@torontomu.ca</a> or view <a href="https://github.com/adamchaboryk/whisper-web" target='_blank' rel='noopener noreferrer'>source code on GitHub.</a></p>
           </>}
         />
         <Tile
@@ -943,8 +1085,13 @@ function UrlModal(props: {
     setUrl(event.target.value);
   };
 
+  const trimmed = url.trim();
+  const isValid = isValidHttpUrl(trimmed);
+
   const onSubmit = () => {
-    props.onSubmit(url);
+    if (isValid) {
+      props.onSubmit(trimmed);
+    }
   };
 
   return (
@@ -954,11 +1101,16 @@ function UrlModal(props: {
       content={
         <>
           <UrlInput onChange={onChange} value={url} placeholder='https://example.com/audio.mp3' />
+          {trimmed.length > 0 && !isValid && (
+            <p className='mt-2 text-xs text-amber-600 dark:text-amber-400'>
+              Please enter a valid URL starting with http:// or https://
+            </p>
+          )}
         </>
       }
       onClose={props.onClose}
       submitText='Submit'
-      submitEnabled={url.trim().length > 0}
+      submitEnabled={isValid}
       onSubmit={onSubmit}
     />
   );
@@ -968,6 +1120,7 @@ function FileTile(props: {
   icon: JSX.Element;
   text: string;
   onProcessingChange: (isProcessing: boolean) => void;
+  onFileError?: (error: unknown) => void;
   onFileUpdate: (
     decoded: AudioBuffer | undefined,
     blob: Blob,
@@ -981,25 +1134,22 @@ function FileTile(props: {
   onBlur?: () => void;
   ariaDescribedBy?: string;
 }) {
-  // Create hidden input element
-  const elem = document.createElement("input");
-  elem.type = "file";
-  elem.accept = "audio/*,video/*,.srt,.vtt";
-  elem.oninput = (event) => {
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  const handleFileInput = (event: React.ChangeEvent<HTMLInputElement>) => {
     // Make sure we have files to use
-    const files = (event.target as HTMLInputElement).files;
-    if (!files) return;
+    const files = event.target.files;
+    if (!files || !files[0]) return;
 
     const file = files[0];
-    if (!file) return;
 
     const isAudioVideo = file.type.startsWith("audio/") || file.type.startsWith("video/");
     const isSubtitle = file.name.endsWith(".srt") || file.name.endsWith(".vtt");
 
     if (!isAudioVideo && !isSubtitle) return;
 
-    // Create a blob that we can use as an src for our audio element
-    const urlObj = URL.createObjectURL(file);
+    // Only create an object URL for audio/video media (subtitles do not play media)
+    const urlObj = isAudioVideo ? URL.createObjectURL(file) : "";
     const mimeType = file.type || (file.name.endsWith(".srt") ? "text/srt" : "text/vtt");
 
     props.onProcessingChange(true);
@@ -1008,27 +1158,30 @@ function FileTile(props: {
     reader.addEventListener("load", async (e) => {
       try {
         if (isSubtitle) {
-          // const text = e.target?.result as string;
-          // Decode later or pass text
-          // For subtitles, we can pass undefined for AudioBuffer
-          // and store the text in the blob or parse it in the parent.
-          props.onFileUpdate(undefined, file, file.name, urlObj, mimeType);
+          props.onFileUpdate(undefined, file, file.name, "", mimeType);
         } else {
-          const arrayBuffer = e.target?.result as ArrayBuffer; // Get the ArrayBuffer
-          if (!arrayBuffer) return;
+          const arrayBuffer = e.target?.result as ArrayBuffer;
+          if (!arrayBuffer) {
+            if (urlObj) URL.revokeObjectURL(urlObj);
+            return;
+          }
 
-          const audioCTX = new AudioContext({
-            sampleRate: Constants.SAMPLING_RATE,
-          });
-
-          const decoded = await audioCTX.decodeAudioData(arrayBuffer);
+          const decoded = await decodeAudioBuffer(arrayBuffer);
           props.onFileUpdate(decoded, file, file.name, urlObj, mimeType);
         }
+      } catch (error) {
+        if (urlObj) URL.revokeObjectURL(urlObj);
+        props.onFileError?.(error);
       } finally {
         props.onProcessingChange(false);
       }
     });
-    reader.addEventListener("error", () => props.onProcessingChange(false));
+
+    reader.addEventListener("error", () => {
+      if (urlObj) URL.revokeObjectURL(urlObj);
+      props.onFileError?.(reader.error);
+      props.onProcessingChange(false);
+    });
 
     if (isSubtitle) {
       reader.readAsText(file);
@@ -1037,21 +1190,32 @@ function FileTile(props: {
     }
 
     // Reset files
-    elem.value = "";
+    event.target.value = "";
   };
 
   return (
-    <Tile
-      icon={props.icon}
-      text={props.text}
-      isUploadButton
-      onClick={() => elem.click()}
-      onMouseEnter={props.onMouseEnter}
-      onMouseLeave={props.onMouseLeave}
-      onFocus={props.onFocus}
-      onBlur={props.onBlur}
-      ariaDescribedBy={props.ariaDescribedBy}
-    />
+    <>
+      <input
+        ref={fileInputRef}
+        type="file"
+        accept="audio/*,video/*,.srt,.vtt"
+        className="sr-only"
+        tabIndex={-1}
+        aria-hidden="true"
+        onChange={handleFileInput}
+      />
+      <Tile
+        icon={props.icon}
+        text={props.text}
+        isUploadButton
+        onClick={() => fileInputRef.current?.click()}
+        onMouseEnter={props.onMouseEnter}
+        onMouseLeave={props.onMouseLeave}
+        onFocus={props.onFocus}
+        onBlur={props.onBlur}
+        ariaDescribedBy={props.ariaDescribedBy}
+      />
+    </>
   );
 }
 

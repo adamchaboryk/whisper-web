@@ -14,7 +14,7 @@ export function UrlInput(
         id='url-input'
         type='url'
         className='url-input'
-        placeholder={props.placeholder ?? 'www.example.com'}
+        placeholder={props.placeholder ?? 'https://example.com/audio.mp3'}
         required
       />
     </div>

@@ -1,3 +1,73 @@
+/**
+ * Sanitizes an HTML string to only allow safe subtitle formatting tags (b, i, u)
+ * and strips all executable scripts, event handlers, and dangerous tags.
+ */
+export const sanitizeHTML = (html: string): string => {
+  if (typeof DOMParser === "undefined") {
+    return html.replace(/<[^>]+>/g, "");
+  }
+
+  const doc = new DOMParser().parseFromString(html, "text/html");
+
+  const walk = (node: Node): string => {
+    if (node.nodeType === Node.TEXT_NODE) {
+      return (node.textContent || "")
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;");
+    }
+    if (node.nodeType === Node.ELEMENT_NODE) {
+      const el = node as HTMLElement;
+      const tag = el.tagName.toLowerCase();
+      let inner = "";
+      for (const child of Array.from(el.childNodes)) {
+        inner += walk(child);
+      }
+
+      if (tag === "b" || tag === "strong") {
+        return `<b>${inner}</b>`;
+      }
+      if (tag === "i" || tag === "em") {
+        return `<i>${inner}</i>`;
+      }
+      if (tag === "u") {
+        return `<u>${inner}</u>`;
+      }
+      if (tag === "br") {
+        return `\n`;
+      }
+      if (tag === "div" || tag === "p") {
+        return inner ? `\n${inner}` : `\n`;
+      }
+      if (tag === "span" || tag === "font") {
+        const style = el.style;
+        if (style) {
+          if (style.fontWeight === "bold" || style.fontWeight >= "700") {
+            inner = `<b>${inner}</b>`;
+          }
+          if (style.fontStyle === "italic") {
+            inner = `<i>${inner}</i>`;
+          }
+          if (typeof style.textDecoration === "string" && style.textDecoration.includes("underline")) {
+            inner = `<u>${inner}</u>`;
+          }
+        }
+        return inner;
+      }
+
+      return inner;
+    }
+    return "";
+  };
+
+  let result = "";
+  for (const child of Array.from(doc.body.childNodes)) {
+    result += walk(child);
+  }
+
+  return result;
+};
+
 export function parseSubtitleFile(text: string, type: 'srt' | 'vtt') {
   const chunks: { text: string; timestamp: [number, number | null] }[] = [];
   const lines = text.split(/\r?\n/);
@@ -50,11 +120,7 @@ export function parseSubtitleFile(text: string, type: 'srt' | 'vtt') {
 
       // Collect text lines until an empty line
       while (i < lines.length && lines[i].trim() !== '') {
-        // Strip HTML/VTT tags from text if needed, for simplicity we just trim
-        let cleanText = lines[i];
-        if (type === 'vtt') {
-          cleanText = cleanText.replace(/<[^>]+>/g, ''); // strip VTT tags
-        }
+        const cleanText = sanitizeHTML(lines[i]);
         textChunk += (textChunk ? '\n' : '') + cleanText;
         i++;
       }

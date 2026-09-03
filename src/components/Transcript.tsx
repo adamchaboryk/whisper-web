@@ -14,7 +14,7 @@ import {
 } from "@floating-ui/react";
 import { SummaryData, TranscriberData } from "../hooks/useTranscriber";
 import { formatAudioTimestamp, formatSrtTimeRange, parseAudioTimestamp } from "../utils/AudioUtils";
-import { formatSrtChunks } from "../utils/SubtitleUtils";
+import { formatSrtChunks, sanitizeHTML } from "../utils/SubtitleUtils";
 import { Spinner } from "./TranscribeButton";
 
 interface Props {
@@ -100,62 +100,6 @@ function FilmIcon(props: { className?: string }) {
   );
 }
 
-const sanitizeHTML = (html: string) => {
-  const doc = new DOMParser().parseFromString(html, "text/html");
-
-  const walk = (node: Node): string => {
-    if (node.nodeType === Node.TEXT_NODE) {
-      return (node.textContent || "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
-    }
-    if (node.nodeType === Node.ELEMENT_NODE) {
-      const el = node as HTMLElement;
-      const tag = el.tagName.toLowerCase();
-      let inner = "";
-      for (const child of Array.from(el.childNodes)) {
-        inner += walk(child);
-      }
-
-      if (tag === "b" || tag === "strong") {
-        return `<b>${inner}</b>`;
-      }
-      if (tag === "i" || tag === "em") {
-        return `<i>${inner}</i>`;
-      }
-      if (tag === "u") {
-        return `<u>${inner}</u>`;
-      }
-      if (tag === "br") {
-        return `\n`;
-      }
-      if (tag === "div" || tag === "p") {
-        return inner ? `\n${inner}` : `\n`;
-      }
-      if (tag === "span" || tag === "font") {
-        if (el.style.fontWeight === "bold" || el.style.fontWeight >= "700") {
-          inner = `<b>${inner}</b>`;
-        }
-        if (el.style.fontStyle === "italic") {
-          inner = `<i>${inner}</i>`;
-        }
-        if (el.style.textDecoration.includes("underline")) {
-          inner = `<u>${inner}</u>`;
-        }
-        return inner;
-      }
-
-      return inner;
-    }
-    return "";
-  };
-
-  let result = "";
-  for (const child of Array.from(doc.body.childNodes)) {
-    result += walk(child);
-  }
-
-  return result;
-};
-
 function EditableChunk(props: {
   text: string;
   label: string;
@@ -165,8 +109,11 @@ function EditableChunk(props: {
 
   useLayoutEffect(() => {
     const editor = editorRef.current;
-    if (editor && document.activeElement !== editor && editor.innerHTML !== props.text) {
-      editor.innerHTML = props.text;
+    if (editor && document.activeElement !== editor) {
+      const sanitized = sanitizeHTML(props.text);
+      if (editor.innerHTML !== sanitized) {
+        editor.innerHTML = sanitized;
+      }
     }
   }, [props.text]);
 
@@ -176,6 +123,24 @@ function EditableChunk(props: {
     props.onTextChange?.(sanitized);
   };
 
+  const handlePaste = (event: React.ClipboardEvent<HTMLDivElement>) => {
+    event.preventDefault();
+    const text = event.clipboardData.getData("text/plain");
+    if (!document.execCommand("insertText", false, text)) {
+      const selection = window.getSelection();
+      if (selection && selection.rangeCount) {
+        selection.deleteFromDocument();
+        selection.getRangeAt(0).insertNode(document.createTextNode(text));
+        selection.collapseToEnd();
+      }
+    }
+    if (editorRef.current) {
+      const html = editorRef.current.innerHTML;
+      const sanitized = sanitizeHTML(html);
+      props.onTextChange?.(sanitized);
+    }
+  };
+
   return (
     <div
       ref={editorRef}
@@ -183,14 +148,17 @@ function EditableChunk(props: {
       contentEditable
       suppressContentEditableWarning
       role='textbox'
+      aria-multiline='true'
       aria-label={props.label}
       onInput={handleInput}
+      onPaste={handlePaste}
     />
   );
 }
 
 function EditableTimestamp(props: {
   timestamp: number;
+  label?: string;
   onTimestampChange?: (newTimestamp: number) => void;
 }) {
   const [prevTimestamp, setPrevTimestamp] = useState(props.timestamp);
@@ -216,6 +184,8 @@ function EditableTimestamp(props: {
   return (
     <input
       type="text"
+      aria-label={props.label}
+      inputMode="numeric"
       className='mr-5 shrink-0 w-20 text-left tabular-nums focus:outline-none focus:ring-2 focus:ring-blue-500 rounded border border-dashed border-blue-300 bg-blue-50/60 px-1 py-1 dark:border-blue-400/50 dark:bg-blue-950/30'
       value={value}
       onChange={(e) => setValue(e.target.value)}
@@ -412,14 +382,14 @@ function PlaybackSpeedSelect(props: {
 }
 
 const extractPlainText = (html: string) => {
-  const tmp = document.createElement("div");
-  tmp.innerHTML = html;
-  return tmp.textContent || tmp.innerText || "";
+  const doc = new DOMParser().parseFromString(html, "text/html");
+  return doc.body.textContent || "";
 };
 
 const decodeSrtText = (html: string) => {
+  const sanitized = sanitizeHTML(html);
   const tmp = document.createElement("textarea");
-  tmp.innerHTML = html;
+  tmp.innerHTML = sanitized;
   return tmp.value;
 };
 
@@ -495,6 +465,16 @@ export default function Transcript({
     saveBlob(blob, "transcript.srt");
   };
 
+  const [copiedState, setCopiedState] = useState<"idle" | "copied" | "failed">("idle");
+
+  useEffect(() => {
+    if (copiedState === "idle") return;
+    const timer = window.setTimeout(() => {
+      setCopiedState("idle");
+    }, 6000);
+    return () => window.clearTimeout(timer);
+  }, [copiedState]);
+
   const copyToClipboard = async () => {
     let text = chunks
       .map((chunk) => extractPlainText(chunk.text))
@@ -510,17 +490,45 @@ export default function Transcript({
 
     try {
       await navigator.clipboard.writeText(text);
-      alert("Transcript copied to clipboard!");
+      setCopiedState("copied");
     } catch (err) {
       console.error("Failed to copy text: ", err);
-      alert("Failed to copy to clipboard. Please try exporting as TXT instead.");
+      setCopiedState("failed");
     }
   };
 
   const exportButtons = [
-    { name: "Copy to Clipboard", onClick: copyToClipboard, icon: <ClipboardIcon className='h-4 w-4' /> },
-    { name: "Export to TXT", onClick: exportTXT, icon: <DocumentTextIcon className='h-4 w-4' /> },
-    { name: "Export to SRT", onClick: exportSRT, icon: <FilmIcon className='h-4 w-4' /> },
+    {
+      name:
+        copiedState === "copied"
+          ? "Copied!"
+          : copiedState === "failed"
+            ? "Failed to copy"
+            : "Copy to Clipboard",
+      ariaLabel:
+        copiedState === "copied"
+          ? "Transcript copied to clipboard"
+          : copiedState === "failed"
+            ? "Failed to copy transcript to clipboard"
+            : "Copy transcript to clipboard",
+      onClick: copyToClipboard,
+      icon:
+        copiedState === "copied" ? (
+          <svg
+            className='h-4 w-4 shrink-0'
+            fill='none'
+            stroke='currentColor'
+            viewBox='0 0 24 24'
+            aria-hidden='true'
+          >
+            <path strokeLinecap='round' strokeLinejoin='round' strokeWidth={2.5} d='M5 13l4 4L19 7' />
+          </svg>
+        ) : (
+          <ClipboardIcon className='h-4 w-4 shrink-0' />
+        ),
+    },
+    { name: "Export to TXT", onClick: exportTXT, icon: <DocumentTextIcon className='h-4 w-4 shrink-0' /> },
+    { name: "Export to SRT", onClick: exportSRT, icon: <FilmIcon className='h-4 w-4 shrink-0' /> },
     // { name: "Export to JSON", onClick: exportJSON },
   ];
 
@@ -722,7 +730,7 @@ export default function Transcript({
                 const isActive = currentTime !== undefined && currentTime >= chunk.timestamp[0] && currentTime < (chunk.timestamp[1] ?? (chunks[i + 1]?.timestamp[0] ?? chunk.timestamp[0] + 5));
                 return (
                   <div
-                    key={`${transcribedData.text}-${i}`}
+                    key={`segment-${i}`}
                     ref={(el) => { chunkRefs.current[i] = el; }}
                     className={`transcript-segment ${isActive ? "active-segment" : ""}`}
                     aria-current={isActive ? "true" : undefined}
@@ -731,13 +739,14 @@ export default function Transcript({
                       <>
                         <EditableTimestamp
                           timestamp={chunk.timestamp[0]}
+                          label={`Start time ${i + 1}`}
                           onTimestampChange={(newTimestamp) => {
                             onChunkUpdate?.(i, { ...chunk, timestamp: [newTimestamp, chunk.timestamp[1]] });
                           }}
                         />
                         <EditableChunk
                           text={chunk.text.trimStart()}
-                          label={`Transcript segment at ${formatAudioTimestamp(chunk.timestamp[0])}`}
+                          label={`Text ${i + 1}`}
                           onTextChange={(text) => onChunkUpdate?.(i, { ...chunk, text })}
                         />
                       </>
@@ -790,11 +799,19 @@ export default function Transcript({
           </div>
 
           <div className='w-full mt-2 flex flex-wrap items-center justify-center gap-3'>
+            <span className='sr-only' role='status' aria-live='polite' aria-atomic='true'>
+              {copiedState === "copied"
+                ? "Transcript copied to clipboard"
+                : copiedState === "failed"
+                  ? "Failed to copy transcript to clipboard"
+                  : ""}
+            </span>
             {exportButtons.map((button, i) => (
               <button
                 key={i}
                 onClick={button.onClick}
                 className='export-button gap-1.5'
+                aria-label={button.ariaLabel}
               >
                 {button.icon}
                 {button.name}

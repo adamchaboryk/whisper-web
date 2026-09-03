@@ -25,16 +25,37 @@ export default function AudioRecorder(props: {
   const [recording, setRecording] = useState(false);
   const [duration, setDuration] = useState(0);
   const [recordedBlob, setRecordedBlob] = useState<Blob | null>(null);
-
+  const [audioUrl, setAudioUrl] = useState<string | null>(null);
+  const audioUrlRef = useRef<string | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const chunksRef = useRef<Blob[]>([]);
-
   const audioRef = useRef<HTMLAudioElement | null>(null);
+
+  const stopStream = () => {
+    if (streamRef.current) {
+      streamRef.current.getTracks().forEach((track) => track.stop());
+      streamRef.current = null;
+    }
+  };
+
+  useEffect(() => {
+    return () => {
+      if (audioUrlRef.current) {
+        URL.revokeObjectURL(audioUrlRef.current);
+      }
+      stopStream();
+    };
+  }, []);
 
   const startRecording = async () => {
     // Reset recording (if any)
+    if (audioUrlRef.current) {
+      URL.revokeObjectURL(audioUrlRef.current);
+      audioUrlRef.current = null;
+    }
     setRecordedBlob(null);
+    setAudioUrl(null);
 
     try {
       if (!streamRef.current) {
@@ -64,9 +85,16 @@ export default function AudioRecorder(props: {
         let blob = new Blob(chunksRef.current, { type: mimeType });
 
         if (mediaRecorder.state === "inactive") {
+          stopStream();
           if (mimeType === "audio/webm") {
-            blob = await webmFixDuration(blob, duration, blob.type);
+            blob = await webmFixDuration(blob, duration, blob.type).catch(() => blob);
           }
+          if (audioUrlRef.current) {
+            URL.revokeObjectURL(audioUrlRef.current);
+          }
+          const url = URL.createObjectURL(blob);
+          audioUrlRef.current = url;
+          setAudioUrl(url);
           setRecordedBlob(blob);
           props.onRecordingComplete(blob);
 
@@ -85,6 +113,7 @@ export default function AudioRecorder(props: {
   const stopRecording = () => {
     if (mediaRecorderRef.current?.state === "recording") {
       mediaRecorderRef.current.stop(); // set state to inactive
+      stopStream();
       setDuration(0);
       setRecording(false);
     }
@@ -125,11 +154,11 @@ export default function AudioRecorder(props: {
           : "Start recording"}
       </button>
 
-      {recordedBlob && (
+      {audioUrl && (
         <audio className='w-full' ref={audioRef} controls>
           <source
-            src={URL.createObjectURL(recordedBlob)}
-            type={recordedBlob.type}
+            src={audioUrl}
+            type={recordedBlob?.type}
           />
         </audio>
       )}

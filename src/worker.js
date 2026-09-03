@@ -1,5 +1,19 @@
 import { pipeline, WhisperTextStreamer } from "@huggingface/transformers";
-import { createTranscriber } from "parakeet.wgsl";
+import { createTranscriber, DEFAULT_MODEL_URLS } from "parakeet.wgsl";
+
+// Cryptographically pinned SHA-256 manifest endpoints for Parakeet TDT 0.6B V2
+const PARAKEET_MODEL_URLS = Object.freeze({
+  fp16: "https://parakeet-wgsl-models.narcotic.sh/v1/fp16/11a359db3d050fd82b002c745b24a5280f3ff13a76834b548df671c95c786c65/manifest.json",
+  fp32: "https://parakeet-wgsl-models.narcotic.sh/v1/fp32/28dee836aefc2bfb01236fda6d10e1df7447724d2489040168549999ea267b1b/manifest.json",
+});
+
+// Supply chain integrity check: ensure parakeet.wgsl package URLs match pinned SHA-256 hashes
+if (
+  DEFAULT_MODEL_URLS.fp16 !== PARAKEET_MODEL_URLS.fp16 ||
+  DEFAULT_MODEL_URLS.fp32 !== PARAKEET_MODEL_URLS.fp32
+) {
+  throw new Error("Parakeet model URL integrity check failed: manifest URLs do not match pinned SHA-256 hashes.");
+}
 
 let parakeetTranscriber = null;
 
@@ -281,6 +295,7 @@ const transcribeWithParakeet = async ({ audio, formatForCaptions, signal }) => {
     });
 
     parakeetTranscriber = createTranscriber({
+      modelUrls: PARAKEET_MODEL_URLS,
       onLoadProgress: ({ phase, fraction, loadedBytes, totalBytes }) => {
         const payload = {
           status: phase === "ready" ? "ready" : "progress",
@@ -422,24 +437,30 @@ const transcribeWithParakeet = async ({ audio, formatForCaptions, signal }) => {
 class PipelineFactory {
   static task = null;
   static model = null;
+  static revision = null;
   static dtype = null;
   static gpu = false;
   static instance = null;
 
-  constructor(tokenizer, model, dtype, gpu) {
+  constructor(tokenizer, model, revision, dtype, gpu) {
     this.tokenizer = tokenizer;
     this.model = model;
+    this.revision = revision;
     this.dtype = dtype;
     this.gpu = gpu;
   }
 
   static async getInstance(progress_callback = null) {
     if (this.instance === null) {
-      this.instance = pipeline(this.task, this.model, {
+      const options = {
         dtype: this.dtype,
         device: this.gpu ? "webgpu" : "wasm",
         progress_callback,
-      });
+      };
+      if (this.revision) {
+        options.revision = this.revision;
+      }
+      this.instance = pipeline(this.task, this.model, options);
     }
 
     return this.instance;
@@ -620,21 +641,28 @@ self.addEventListener("message", async (event) => {
 class AutomaticSpeechRecognitionPipelineFactory extends PipelineFactory {
   static task = "automatic-speech-recognition";
   static model = null;
+  static revision = null;
   static dtype = null;
   static gpu = false;
 }
 
-const transcribe = async ({ audio, formatForCaptions, model, dtype, gpu, subtask, language, duration, signal }) => {
+const transcribe = async ({ audio, formatForCaptions, model, revision, dtype, gpu, subtask, language, duration, signal }) => {
   if (model === "parakeet.wgsl") {
     return transcribeWithParakeet({ audio, formatForCaptions, signal });
+  }
+
+  // Supply chain validation: ensure any model loaded from Hugging Face is pinned to an immutable 40-character commit SHA
+  if (!revision || typeof revision !== "string" || !/^[0-9a-f]{40}$/i.test(revision)) {
+    throw new Error(`Untrusted or unpinned model revision for "${model}". Model weights must be pinned to an immutable 40-character commit hash.`);
   }
 
   const isDistilWhisper = model.startsWith("distil-whisper/");
 
   const p = AutomaticSpeechRecognitionPipelineFactory;
-  if (p.model !== model || p.dtype !== dtype || p.gpu !== gpu) {
-    // Invalidate model if different model, dtype, or gpu setting
+  if (p.model !== model || p.revision !== revision || p.dtype !== dtype || p.gpu !== gpu) {
+    // Invalidate model if different model, revision, dtype, or gpu setting
     p.model = model;
+    p.revision = revision;
     p.dtype = dtype;
     p.gpu = gpu;
 

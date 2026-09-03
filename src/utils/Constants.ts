@@ -133,12 +133,27 @@ export const LANGUAGES = {
 
 export const isMobileOrTablet = mobileTabletCheck();
 
-export const MODELS: { [key: string]: [string, string] } = {
-  "parakeet.wgsl": ["NVIDIA Parakeet (Fast & Accurate)", "en"],
-  ...(isMobileOrTablet ? { "onnx-community/whisper-tiny": ["Whisper Tiny (Fastest)", ""] } : {}),
-  "onnx-community/whisper-base": ["Whisper Base (Fast & Light)", ""],
-  "onnx-community/whisper-small": ["Whisper Small (Balanced)", ""],
-  "onnx-community/whisper-large-v3-turbo": ["Whisper Large (Slower, but Best Quality)", ""],
+// Canonical SHA-256 hashes and immutable manifest URLs for NVIDIA Parakeet TDT 0.6B V2.
+// The parakeet.wgsl engine verifies these cryptographic hashes upon downloading model weights.
+export const PARAKEET_MODEL_HASHES = Object.freeze({
+  fp16: "11a359db3d050fd82b002c745b24a5280f3ff13a76834b548df671c95c786c65",
+  fp32: "28dee836aefc2bfb01236fda6d10e1df7447724d2489040168549999ea267b1b",
+});
+
+export const PARAKEET_MODEL_URLS = Object.freeze({
+  fp16: `https://parakeet-wgsl-models.narcotic.sh/v1/fp16/${PARAKEET_MODEL_HASHES.fp16}/manifest.json`,
+  fp32: `https://parakeet-wgsl-models.narcotic.sh/v1/fp32/${PARAKEET_MODEL_HASHES.fp32}/manifest.json`,
+});
+
+// Each model entry is [displayName, languageHint, revision].
+// Revisions are pinned to immutable Git commit SHAs from the Hugging Face Hub,
+// or cryptographic SHA-256 hashes for Parakeet, to prevent supply chain attacks.
+export const MODELS: { [key: string]: [string, string, string] } = {
+  "parakeet.wgsl": ["NVIDIA Parakeet (Fast & Accurate)", "en", PARAKEET_MODEL_HASHES.fp16],
+  ...(isMobileOrTablet ? { "onnx-community/whisper-tiny": ["Whisper Tiny (Fastest)", "", "ff4177021cc41f7db950912b73ea4fdf7d01d8e7"] } : {}),
+  "onnx-community/whisper-base": ["Whisper Base (Fast & Light)", "", "1846881b6b3a3024392c1eea3ad983695bc23925"],
+  "onnx-community/whisper-small": ["Whisper Small (Balanced)", "", "36050c46d777d46dc4b5f43f6d90574fc38f8732"],
+  "onnx-community/whisper-large-v3-turbo": ["Whisper Large (Slower, but Best Quality)", "", "360ebcde2559d60bb474678be3c1de9ef347d01a"],
 };
 
 export const DTYPES: Record<string, string> = {
