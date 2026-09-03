@@ -10,7 +10,11 @@
   min-height: 44px;
   border-radius: 0.5rem;
   cursor: pointer;
-  transition: background-color 150ms ease, border-color 150ms ease, color 150ms ease, opacity 150ms ease;
+  transition:
+    background-color 150ms ease,
+    border-color 150ms ease,
+    color 150ms ease,
+    opacity 150ms ease;
 }
 
 .control-button {
@@ -262,12 +266,14 @@
   display: inline-flex;
   align-items: center;
   border-radius: 0.5rem;
-  background: #004C9B;
+  background: #004c9b;
   padding: 0.5rem 1rem;
   color: white;
   font-weight: 500;
   cursor: pointer;
-  transition: background-color 150ms ease, outline-color 150ms ease;
+  transition:
+    background-color 150ms ease,
+    outline-color 150ms ease;
 }
 
 .export-button:hover:not(:disabled) {
@@ -393,12 +399,12 @@
   background: #7f1d1d;
 }
 
-[role='dialog'] h3 {
+[role="dialog"] h3 {
   font-weight: 500;
   font-size: 1.1rem;
 }
 
-[role='dialog'] p {
+[role="dialog"] p {
   padding-bottom: 0.5rem;
   font-size: 0.975rem;
 }
@@ -417,7 +423,9 @@
   color: #334155;
   border: 2px solid #334155;
   border-top: none;
-  box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1), 0 2px 4px -1px rgba(0, 0, 0, 0.06);
+  box-shadow:
+    0 4px 6px -1px rgba(0, 0, 0, 0.1),
+    0 2px 4px -1px rgba(0, 0, 0, 0.06);
 
   @media (max-width: 480px) {
     max-width: 300px;
@@ -429,7 +437,9 @@
   color: var(--text);
   border: 1px solid rgb(226, 232, 240);
   border-top: none;
-  box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.3), 0 2px 4px -1px rgba(0, 0, 0, 0.2);
+  box-shadow:
+    0 4px 6px -1px rgba(0, 0, 0, 0.3),
+    0 2px 4px -1px rgba(0, 0, 0, 0.2);
 }
 
 /* Transcript Segment */
@@ -441,23 +451,34 @@
   padding: 1rem;
   border-radius: 0.5rem;
   border-left: 4px solid transparent;
+  border-inline-start: 4px solid transparent;
   background: var(--surface-muted);
-  box-shadow: 0 0 0 1px rgb(51 65 85 / 0.1), 0 20px 25px -5px rgb(0 0 0 / 0.05);
-  transition: background-color 150ms ease-out, border-color 150ms ease-out, box-shadow 150ms ease-out;
+  box-shadow:
+    0 0 0 1px rgb(51 65 85 / 0.1),
+    0 20px 25px -5px rgb(0 0 0 / 0.05);
+  transition:
+    background-color 150ms ease-out,
+    border-color 150ms ease-out,
+    box-shadow 150ms ease-out;
   content-visibility: auto;
   contain-intrinsic-size: auto 68px;
 }
 
 .dark .transcript-segment {
   background: #334155;
-  box-shadow: 0 0 0 1px rgb(100 116 139 / 0.3), 0 20px 25px -5px rgb(0 0 0 / 0.05);
+  box-shadow:
+    0 0 0 1px rgb(100 116 139 / 0.3),
+    0 20px 25px -5px rgb(0 0 0 / 0.05);
 }
 
 .transcript-segment.active-segment,
 .active-segment {
   background: #dbeafe;
   border-left-color: #1d4ed8;
-  box-shadow: 0 0 0 1px #93c5fd, 0 20px 25px -5px rgb(0 0 0 / 0.05);
+  border-inline-start-color: #1d4ed8;
+  box-shadow:
+    0 0 0 1px #93c5fd,
+    0 20px 25px -5px rgb(0 0 0 / 0.05);
 }
 
 .transcript-segment.active-segment button,
@@ -470,7 +491,26 @@
 .dark .active-segment {
   background: rgb(30 58 138 / 0.4);
   border-left-color: #60a5fa;
-  box-shadow: 0 0 0 1px #3b82f6, 0 20px 25px -5px rgb(0 0 0 / 0.05);
+  border-inline-start-color: #60a5fa;
+  box-shadow:
+    0 0 0 1px #3b82f6,
+    0 20px 25px -5px rgb(0 0 0 / 0.05);
+}
+
+[dir="rtl"] .transcript-segment {
+  border-left-color: transparent;
+}
+
+[dir="rtl"] .transcript-segment.active-segment,
+[dir="rtl"] .active-segment {
+  border-left-color: transparent;
+  border-inline-start-color: #1d4ed8;
+}
+
+.dark [dir="rtl"] .transcript-segment.active-segment,
+.dark [dir="rtl"] .active-segment {
+  border-left-color: transparent;
+  border-inline-start-color: #60a5fa;
 }
 
 .dark .transcript-segment.active-segment button,
@@ -491,7 +531,9 @@
 .timestamp-pill {
   padding: 0.125rem 0.5rem;
   border-radius: 9999px;
-  transition: background-color 150ms ease, color 150ms ease;
+  transition:
+    background-color 150ms ease,
+    color 150ms ease;
   cursor: pointer;
   outline: none;
 }

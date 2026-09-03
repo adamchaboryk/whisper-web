@@ -15,7 +15,21 @@ function App() {
     source: TranscriberData;
     chunks: TranscriberData["chunks"];
   }>();
-  const [currentTime, setCurrentTime] = useState<number | undefined>(undefined);
+  const timeSubscribersRef = useRef<Set<(time: number) => void>>(new Set());
+  const handleTimeUpdate = useCallback((time: number) => {
+    for (const subscriber of timeSubscribersRef.current) {
+      subscriber(time);
+    }
+  }, []);
+  const subscribeToTimeUpdate = useCallback(
+    (subscriber: (time: number) => void) => {
+      timeSubscribersRef.current.add(subscriber);
+      return () => {
+        timeSubscribersRef.current.delete(subscriber);
+      };
+    },
+    [],
+  );
   const [isAutoScrollEnabled, setIsAutoScrollEnabled] = useState(() => {
     const stored = window.localStorage.getItem("whisper-web-autoscroll");
     return stored ? stored === "true" : true;
@@ -133,12 +147,19 @@ function App() {
             onGenerateSummary={handleGenerateSummary}
             transcriptChunks={previewChunks}
             onSeekReady={handleSeekReady}
-            onTimeUpdate={setCurrentTime}
+            onTimeUpdate={handleTimeUpdate}
             playbackRate={playbackRate}
+            isEditing={Boolean(draftChunks)}
           />
           <Transcript
             transcribedData={transcriber.output}
             chunks={previewChunks}
+            language={
+              transcriber.output?.language ||
+              (transcriber.subtask === "translate"
+                ? "en"
+                : transcriber.language)
+            }
             onChunkUpdate={handleChunkUpdate}
             onSeekTo={handleSeekTo}
             isEditing={Boolean(draftChunks)}
@@ -148,7 +169,7 @@ function App() {
             summary={transcriber.summary}
             onGenerateSummary={handleGenerateSummary}
             supportsSummarizer={transcriber.supportsSummarizer}
-            currentTime={currentTime}
+            subscribeToTimeUpdate={subscribeToTimeUpdate}
             isAutoScrollSettingEnabled={isAutoScrollEnabled}
             setIsAutoScrollSettingEnabled={setIsAutoScrollEnabled}
             playbackRate={playbackRate}

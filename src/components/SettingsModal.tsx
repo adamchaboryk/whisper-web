@@ -1,6 +1,10 @@
 import { useEffect, useMemo, useState } from "react";
-import { checkSupport } from "parakeet.wgsl";
-import Constants, { LANGUAGES, MODELS, isIOS } from "../utils/Constants";
+import Constants, {
+  LANGUAGES,
+  MODELS,
+  isIOS,
+  getCachedWebGpuSupport,
+} from "../utils/Constants";
 import { Transcriber } from "../hooks/useTranscriber";
 import Modal from "./modal/Modal";
 
@@ -33,7 +37,9 @@ export default function SettingsModal(props: SettingsModalProps) {
     );
   }, [props.transcriber.model]);
 
-  const HAS_WEBGPU_API = "gpu" in navigator && !!(navigator as Navigator & { gpu?: unknown }).gpu;
+  const HAS_WEBGPU_API =
+    "gpu" in navigator &&
+    !!(navigator as Navigator & { gpu?: unknown }).gpu;
   const [IS_WEBGPU_AVAILABLE, setIsWebgpuAvailable] = useState(false);
   // Tracks whether the async WebGPU support check has finished, so we don't
   // prematurely reset settings based on the initial "unavailable" default.
@@ -52,7 +58,7 @@ export default function SettingsModal(props: SettingsModalProps) {
     }
 
     let cancelled = false;
-    checkSupport()
+    getCachedWebGpuSupport()
       .then((result) => {
         if (!cancelled) {
           setIsWebgpuAvailable(result.supported);
@@ -75,19 +81,31 @@ export default function SettingsModal(props: SettingsModalProps) {
   }, [HAS_WEBGPU_API]);
 
   useEffect(() => {
-    if (hasCheckedWebgpu && (!IS_WEBGPU_AVAILABLE || isIOS) && props.transcriber.gpu) {
+    if (
+      hasCheckedWebgpu &&
+      (!IS_WEBGPU_AVAILABLE || isIOS) &&
+      props.transcriber.gpu
+    ) {
       props.transcriber.setGPU(false);
     }
   }, [hasCheckedWebgpu, IS_WEBGPU_AVAILABLE, props.transcriber]);
 
   useEffect(() => {
-    if (hasCheckedWebgpu && !IS_WEBGPU_AVAILABLE && props.transcriber.model === "parakeet.wgsl") {
+    if (
+      hasCheckedWebgpu &&
+      !IS_WEBGPU_AVAILABLE &&
+      props.transcriber.model === "parakeet.wgsl"
+    ) {
       props.transcriber.setModel("onnx-community/whisper-base");
     }
   }, [hasCheckedWebgpu, IS_WEBGPU_AVAILABLE, props.transcriber]);
 
   useEffect(() => {
-    if (hasCheckedWebgpu && (!IS_WEBGPU_AVAILABLE || isIOS) && props.transcriber.dtype === "fp16") {
+    if (
+      hasCheckedWebgpu &&
+      (!IS_WEBGPU_AVAILABLE || isIOS) &&
+      props.transcriber.dtype === "fp16"
+    ) {
       props.transcriber.setDtype(Constants.DEFAULT_DTYPE);
     }
   }, [hasCheckedWebgpu, IS_WEBGPU_AVAILABLE, props.transcriber]);
@@ -125,8 +143,13 @@ export default function SettingsModal(props: SettingsModalProps) {
       title='Settings'
       content={
         <>
-          <label htmlFor='model-select' className='form-label'>Model</label>
-          <span className='text-gray-600 dark:text-slate-400 block'>Some models are bigger than others, so your browser may cache up to about 1.5 GB.</span>
+          <label htmlFor='model-select' className='form-label'>
+            Model
+          </label>
+          <span className='text-gray-600 dark:text-slate-400 block'>
+            Some models are bigger than others, so your browser may
+            cache up to about 1.5 GB.
+          </span>
           <select
             id='model-select'
             className='form-select mt-1 mb-3'
@@ -188,17 +211,24 @@ export default function SettingsModal(props: SettingsModalProps) {
                       type='checkbox'
                       checked={props.transcriber.gpu}
                       onChange={(e) => {
-                        props.transcriber.setGPU(e.target.checked);
+                        props.transcriber.setGPU(
+                          e.target.checked,
+                        );
                       }}
                     ></input>
-                    <label htmlFor='gpu' className='form-label form-label--checkbox'>
+                    <label
+                      htmlFor='gpu'
+                      className='form-label form-label--checkbox'
+                    >
                       Enable GPU acceleration
                     </label>
                   </div>
                 </div>
               )}
 
-              <label htmlFor='selectLang' className='form-label'>Source language</label>
+              <label htmlFor='selectLang' className='form-label'>
+                Source language
+              </label>
               <select
                 id='selectLang'
                 className='form-select mt-1 mb-3'
@@ -208,7 +238,9 @@ export default function SettingsModal(props: SettingsModalProps) {
                     : getModelLanguage()
                 }
                 onChange={(e) => {
-                  props.transcriber.setLanguage(e.target.value);
+                  props.transcriber.setLanguage(
+                    e.target.value,
+                  );
                 }}
                 disabled={!isMultilingual}
               >
@@ -219,7 +251,9 @@ export default function SettingsModal(props: SettingsModalProps) {
                 ))}
               </select>
 
-              <label htmlFor='selectTask' className='form-label'>Task</label>
+              <label htmlFor='selectTask' className='form-label'>
+                Task
+              </label>
               <select
                 id='selectTask'
                 className='form-select mt-1 mb-3'
@@ -229,7 +263,9 @@ export default function SettingsModal(props: SettingsModalProps) {
                     : "transcribe"
                 }
                 onChange={(e) => {
-                  props.transcriber.setSubtask(e.target.value);
+                  props.transcriber.setSubtask(
+                    e.target.value,
+                  );
                 }}
                 disabled={!isMultilingual}
               >
@@ -246,4 +282,3 @@ export default function SettingsModal(props: SettingsModalProps) {
     />
   );
 }
-

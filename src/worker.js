@@ -12,7 +12,9 @@ if (
   DEFAULT_MODEL_URLS.fp16 !== PARAKEET_MODEL_URLS.fp16 ||
   DEFAULT_MODEL_URLS.fp32 !== PARAKEET_MODEL_URLS.fp32
 ) {
-  throw new Error("Parakeet model URL integrity check failed: manifest URLs do not match pinned SHA-256 hashes.");
+  throw new Error(
+    "Parakeet model URL integrity check failed: manifest URLs do not match pinned SHA-256 hashes.",
+  );
 }
 
 let parakeetTranscriber = null;
@@ -62,34 +64,113 @@ const TARGET_CPS = 16.0;
 const MAX_CPS = 20.0;
 
 const CONJUNCTIONS = new Set([
-  "and", "but", "or", "nor", "for", "yet", "so",
-  "because", "although", "though", "while", "since",
-  "unless", "whereas", "which", "that", "who", "whom", "whose",
-  "when", "whenever", "where", "wherever", "if", "whether", "as"
+  "and",
+  "but",
+  "or",
+  "nor",
+  "for",
+  "yet",
+  "so",
+  "because",
+  "although",
+  "though",
+  "while",
+  "since",
+  "unless",
+  "whereas",
+  "which",
+  "that",
+  "who",
+  "whom",
+  "whose",
+  "when",
+  "whenever",
+  "where",
+  "wherever",
+  "if",
+  "whether",
+  "as",
 ]);
 
 const PREPOSITIONS = new Set([
-  "in", "on", "at", "to", "from", "with", "by", "about",
-  "into", "through", "during", "before", "after", "above",
-  "below", "between", "under", "over", "of", "off", "out"
+  "in",
+  "on",
+  "at",
+  "to",
+  "from",
+  "with",
+  "by",
+  "about",
+  "into",
+  "through",
+  "during",
+  "before",
+  "after",
+  "above",
+  "below",
+  "between",
+  "under",
+  "over",
+  "of",
+  "off",
+  "out",
 ]);
 
 const ARTICLES_AND_DETERMINERS = new Set([
-  "a", "an", "the", "this", "that", "these", "those"
+  "a",
+  "an",
+  "the",
+  "this",
+  "that",
+  "these",
+  "those",
 ]);
 
 const POSSESSIVES = new Set([
-  "my", "your", "his", "her", "its", "our", "their"
+  "my",
+  "your",
+  "his",
+  "her",
+  "its",
+  "our",
+  "their",
 ]);
 
 const HONORIFICS = new Set([
-  "mr.", "mrs.", "ms.", "dr.", "prof.", "sr.", "jr.", "st."
+  "mr.",
+  "mrs.",
+  "ms.",
+  "dr.",
+  "prof.",
+  "sr.",
+  "jr.",
+  "st.",
 ]);
 
 const AUXILIARY_VERBS = new Set([
-  "is", "am", "are", "was", "were", "be", "been", "being",
-  "have", "has", "had", "do", "does", "did",
-  "will", "would", "shall", "should", "can", "could", "may", "might", "must"
+  "is",
+  "am",
+  "are",
+  "was",
+  "were",
+  "be",
+  "been",
+  "being",
+  "have",
+  "has",
+  "had",
+  "do",
+  "does",
+  "did",
+  "will",
+  "would",
+  "shall",
+  "should",
+  "can",
+  "could",
+  "may",
+  "might",
+  "must",
 ]);
 
 const splitTextIntoPyramidLines = (text) => {
@@ -182,22 +263,27 @@ const toCaptionChunks = (chunks) => {
 
   const allWords = [];
   for (const chunk of chunks) {
-    const chunkText = chunk.text.trim();
+    const chunkText = chunk.text.replace(/^[\s\-—–]+/, "").trim();
     if (!chunkText) continue;
 
     const words = chunkText.split(/\s+/).filter(Boolean);
     if (!words.length) continue;
 
     const sourceStart = chunk.timestamp[0];
-    const sourceEnd = chunk.timestamp[1] ?? (sourceStart + words.length * 0.4);
+    const sourceEnd =
+      chunk.timestamp[1] ?? sourceStart + words.length * 0.4;
     const sourceDuration = Math.max(0.2, sourceEnd - sourceStart);
     const totalChars = words.join(" ").length;
 
     let charOffset = 0;
     for (const word of words) {
-      const wordStart = sourceStart + (sourceDuration * charOffset) / Math.max(1, totalChars);
+      const wordStart =
+        sourceStart +
+        (sourceDuration * charOffset) / Math.max(1, totalChars);
       charOffset += word.length;
-      const wordEnd = sourceStart + (sourceDuration * charOffset) / Math.max(1, totalChars);
+      const wordEnd =
+        sourceStart +
+        (sourceDuration * charOffset) / Math.max(1, totalChars);
       charOffset += 1;
       allWords.push({ word, start: wordStart, end: wordEnd });
     }
@@ -224,7 +310,8 @@ const toCaptionChunks = (chunks) => {
     const candidateWords = [...currentWords, wordObj];
     const candidateText = candidateWords.map((w) => w.word).join(" ");
     const candidateLength = candidateText.length;
-    const candidateDuration = wordObj.end - (currentWords[0]?.start ?? wordObj.start);
+    const candidateDuration =
+      wordObj.end - (currentWords[0]?.start ?? wordObj.start);
 
     const isTerminalPunctuation = /[.!?]["'”)]?$/.test(wordObj.word);
     const isClausePunctuation = /[,;:\u2014-]["'”)]?$/.test(wordObj.word);
@@ -241,7 +328,11 @@ const toCaptionChunks = (chunks) => {
 
     if (isTerminalPunctuation && candidateLength >= 20) {
       flushEvent();
-    } else if (isClausePunctuation && candidateLength >= 45 && candidateDuration >= 3.0) {
+    } else if (
+      isClausePunctuation &&
+      candidateLength >= 45 &&
+      candidateDuration >= 3.0
+    ) {
       flushEvent();
     }
   }
@@ -256,8 +347,15 @@ const toCaptionChunks = (chunks) => {
     const idealReadingDuration = visibleLength / TARGET_CPS;
 
     let duration = ev.end - ev.start;
-    duration = Math.max(duration, MIN_SUBTITLE_DURATION, minReadingDuration);
-    duration = Math.max(duration, Math.min(idealReadingDuration, MAX_SUBTITLE_DURATION));
+    duration = Math.max(
+      duration,
+      MIN_SUBTITLE_DURATION,
+      minReadingDuration,
+    );
+    duration = Math.max(
+      duration,
+      Math.min(idealReadingDuration, MAX_SUBTITLE_DURATION),
+    );
     duration = Math.min(duration, MAX_SUBTITLE_DURATION);
 
     formattedEvents.push({
@@ -273,13 +371,25 @@ const toCaptionChunks = (chunks) => {
     if (next) {
       const maxCurrentEnd = next.timestamp[0] - INTER_SUBTITLE_GAP;
       if (current.timestamp[1] > maxCurrentEnd) {
-        if (maxCurrentEnd - current.timestamp[0] >= TECHNICAL_FLOOR_DURATION) {
-          current.timestamp[1] = Math.max(current.timestamp[0] + TECHNICAL_FLOOR_DURATION, maxCurrentEnd);
+        if (
+          maxCurrentEnd - current.timestamp[0] >=
+          TECHNICAL_FLOOR_DURATION
+        ) {
+          current.timestamp[1] = Math.max(
+            current.timestamp[0] + TECHNICAL_FLOOR_DURATION,
+            maxCurrentEnd,
+          );
         } else {
-          current.timestamp[1] = current.timestamp[0] + TECHNICAL_FLOOR_DURATION;
-          next.timestamp[0] = current.timestamp[1] + INTER_SUBTITLE_GAP;
-          if (next.timestamp[1] < next.timestamp[0] + TECHNICAL_FLOOR_DURATION) {
-            next.timestamp[1] = next.timestamp[0] + TECHNICAL_FLOOR_DURATION;
+          current.timestamp[1] =
+            current.timestamp[0] + TECHNICAL_FLOOR_DURATION;
+          next.timestamp[0] =
+            current.timestamp[1] + INTER_SUBTITLE_GAP;
+          if (
+            next.timestamp[1] <
+            next.timestamp[0] + TECHNICAL_FLOOR_DURATION
+          ) {
+            next.timestamp[1] =
+              next.timestamp[0] + TECHNICAL_FLOOR_DURATION;
           }
         }
       }
@@ -334,7 +444,8 @@ const transcribeWithParakeet = async ({ audio, formatForCaptions, signal }) => {
     const MAX_LINE_CHARACTERS = 42;
     const MIN_LINE_CHARACTERS = 32;
 
-    const getLineLengths = (text) => text.split("\n").map((line) => line.length);
+    const getLineLengths = (text) =>
+      text.split("\n").map((line) => line.length);
 
     const appendWord = (text, word) => {
       if (!forCaptions) {
@@ -374,8 +485,10 @@ const transcribeWithParakeet = async ({ audio, formatForCaptions, signal }) => {
 
       const startsNewChunk =
         currentChunk &&
-        (word.startSeconds - currentChunk.timestamp[1] > MAX_PAUSE_SECONDS ||
-          word.endSeconds - currentChunk.timestamp[0] > MAX_CHUNK_DURATION_SECONDS ||
+        (word.startSeconds - currentChunk.timestamp[1] >
+          MAX_PAUSE_SECONDS ||
+          word.endSeconds - currentChunk.timestamp[0] >
+          MAX_CHUNK_DURATION_SECONDS ||
           shouldSplitForLineBalance(currentChunk.text, text));
 
       if (startsNewChunk) {
@@ -505,7 +618,7 @@ self.addEventListener("message", async (event) => {
       const chunkMessage = {
         ...message,
         audio: audioChunk,
-        duration: audioChunk.length / SAMPLE_RATE
+        duration: audioChunk.length / SAMPLE_RATE,
       };
 
       let lastProgressTime = Date.now();
@@ -513,33 +626,59 @@ self.addEventListener("message", async (event) => {
       chunkMessage.signal = abortController.signal;
 
       self.postMessage = (msg) => {
-        if (msg.status === "update" || msg.status === "transcription_progress" || msg.status === "progress" || msg.status === "initiate" || msg.status === "ready" || msg.status === "done") {
+        if (
+          msg.status === "update" ||
+          msg.status === "transcription_progress" ||
+          msg.status === "progress" ||
+          msg.status === "initiate" ||
+          msg.status === "ready" ||
+          msg.status === "done"
+        ) {
           lastProgressTime = Date.now();
         }
         if (msg.status === "update") {
-          const shiftedChunks = msg.data.chunks.map(c => ({
+          const shiftedChunks = msg.data.chunks.map((c) => ({
             ...c,
             timestamp: [
-              c.timestamp[0] !== null ? c.timestamp[0] + currentTimeOffset : null,
-              c.timestamp[1] !== null ? c.timestamp[1] + currentTimeOffset : null
-            ]
+              c.timestamp[0] !== null
+                ? c.timestamp[0] + currentTimeOffset
+                : null,
+              c.timestamp[1] !== null
+                ? c.timestamp[1] + currentTimeOffset
+                : null,
+            ],
           }));
           originalPostMessage({
             status: "update",
             data: {
-              text: fullText + (fullText ? " " : "") + msg.data.text,
-              chunks: [...allChunks, ...shiftedChunks],
+              text:
+                fullText +
+                (fullText ? " " : "") +
+                msg.data.text,
+              chunks:
+                allChunks.length > 0
+                  ? allChunks.concat(shiftedChunks)
+                  : shiftedChunks,
               tps: msg.data.tps,
               duration: globalDuration,
-              progress: ((offset + audioChunk.length) / fullAudio.length) * 100
-            }
+              language:
+                message.subtask === "translate"
+                  ? "en"
+                  : message.language || undefined,
+              progress:
+                ((offset + audioChunk.length) /
+                  fullAudio.length) *
+                100,
+            },
           });
         } else if (msg.status === "transcription_progress") {
           const chunkProgress = msg.data.progress;
-          const overallProgress = ((offset / fullAudio.length) * 100) + (chunkProgress * (audioChunk.length / fullAudio.length));
+          const overallProgress =
+            (offset / fullAudio.length) * 100 +
+            chunkProgress * (audioChunk.length / fullAudio.length);
           originalPostMessage({
             status: "transcription_progress",
-            data: { progress: overallProgress }
+            data: { progress: overallProgress },
           });
         } else {
           originalPostMessage(msg);
@@ -557,17 +696,32 @@ self.addEventListener("message", async (event) => {
         return chunkResult;
       } catch (error) {
         const errorMsg = error?.message ?? String(error);
-        if (isParakeet && /watchdog_timeout|aborted|device.*lost|gpu.*lost|out.*memory|overflow|invalid.*token/i.test(errorMsg)) {
-          console.warn(`[whisper-web] Chunk failed at offset ${offset} (${isSubChunk ? '30s sub-chunk' : '5m chunk'}):`, errorMsg);
-          if (parakeetTranscriber) {
-            try { parakeetTranscriber.dispose(); } catch { }
-            parakeetTranscriber = null;
-          }
+        if (isParakeet && parakeetTranscriber) {
+          try {
+            parakeetTranscriber.dispose();
+          } catch { }
+          parakeetTranscriber = null;
+        }
+        if (
+          isParakeet &&
+          /watchdog_timeout|aborted|device.*lost|gpu.*lost|out.*memory|overflow|invalid.*token/i.test(
+            errorMsg,
+          )
+        ) {
+          console.warn(
+            `[whisper-web] Chunk failed at offset ${offset} (${isSubChunk ? "30s sub-chunk" : "5m chunk"}):`,
+            errorMsg,
+          );
           if (!isSubChunk) {
             return "RETRY_SUBCHUNKS";
           }
           // If a 30s sub-chunk fails, it's truly poisoned. Skip it.
-          return { text: "", chunks: [], tps: 0, duration: chunkMessage.duration };
+          return {
+            text: "",
+            chunks: [],
+            tps: 0,
+            duration: chunkMessage.duration,
+          };
         }
         throw error;
       } finally {
@@ -576,26 +730,52 @@ self.addEventListener("message", async (event) => {
       }
     };
 
-    for (let offset = 0; offset < fullAudio.length; offset += SAMPLES_PER_CHUNK) {
-      const audioChunk = fullAudio.subarray(offset, offset + SAMPLES_PER_CHUNK);
+    for (
+      let offset = 0;
+      offset < fullAudio.length;
+      offset += SAMPLES_PER_CHUNK
+    ) {
+      const audioChunk = fullAudio.subarray(
+        offset,
+        offset + SAMPLES_PER_CHUNK,
+      );
 
       const chunkResult = await runChunk(audioChunk, offset, false);
 
       if (chunkResult === "RETRY_SUBCHUNKS") {
-        console.warn(`[whisper-web] Splitting 5-minute chunk into 30s sub-chunks to bypass poisoned audio...`);
+        console.warn(
+          `[whisper-web] Splitting 5-minute chunk into 30s sub-chunks to bypass poisoned audio...`,
+        );
         const SUBCHUNK_SAMPLES = 30 * SAMPLE_RATE;
 
-        for (let sub = 0; sub < audioChunk.length; sub += SUBCHUNK_SAMPLES) {
-          const subData = audioChunk.subarray(sub, sub + SUBCHUNK_SAMPLES);
-          const subResult = await runChunk(subData, offset + sub, true);
+        for (
+          let sub = 0;
+          sub < audioChunk.length;
+          sub += SUBCHUNK_SAMPLES
+        ) {
+          const subData = audioChunk.subarray(
+            sub,
+            sub + SUBCHUNK_SAMPLES,
+          );
+          const subResult = await runChunk(
+            subData,
+            offset + sub,
+            true,
+          );
 
           if (subResult && subResult.text) {
-            const shiftedChunks = subResult.chunks.map(c => ({
+            const shiftedChunks = subResult.chunks.map((c) => ({
               ...c,
               timestamp: [
-                c.timestamp[0] !== null ? c.timestamp[0] + ((offset + sub) / SAMPLE_RATE) : null,
-                c.timestamp[1] !== null ? c.timestamp[1] + ((offset + sub) / SAMPLE_RATE) : null
-              ]
+                c.timestamp[0] !== null
+                  ? c.timestamp[0] +
+                  (offset + sub) / SAMPLE_RATE
+                  : null,
+                c.timestamp[1] !== null
+                  ? c.timestamp[1] +
+                  (offset + sub) / SAMPLE_RATE
+                  : null,
+              ],
             }));
             for (let i = 0; i < shiftedChunks.length; i++) {
               allChunks.push(shiftedChunks[i]);
@@ -605,16 +785,20 @@ self.addEventListener("message", async (event) => {
           }
 
           if (sub + SUBCHUNK_SAMPLES < audioChunk.length) {
-            await new Promise(resolve => setTimeout(resolve, 50));
+            await new Promise((resolve) => setTimeout(resolve, 50));
           }
         }
       } else if (chunkResult) {
-        const shiftedChunks = chunkResult.chunks.map(c => ({
+        const shiftedChunks = chunkResult.chunks.map((c) => ({
           ...c,
           timestamp: [
-            c.timestamp[0] !== null ? c.timestamp[0] + (offset / SAMPLE_RATE) : null,
-            c.timestamp[1] !== null ? c.timestamp[1] + (offset / SAMPLE_RATE) : null
-          ]
+            c.timestamp[0] !== null
+              ? c.timestamp[0] + offset / SAMPLE_RATE
+              : null,
+            c.timestamp[1] !== null
+              ? c.timestamp[1] + offset / SAMPLE_RATE
+              : null,
+          ],
         }));
         for (let i = 0; i < shiftedChunks.length; i++) {
           allChunks.push(shiftedChunks[i]);
@@ -624,7 +808,7 @@ self.addEventListener("message", async (event) => {
       }
 
       if (offset + SAMPLES_PER_CHUNK < fullAudio.length) {
-        await new Promise(resolve => setTimeout(resolve, 50));
+        await new Promise((resolve) => setTimeout(resolve, 50));
       }
     }
 
@@ -636,7 +820,11 @@ self.addEventListener("message", async (event) => {
         text: fullText,
         chunks: allChunks,
         tps: globalTps,
-        duration: globalDuration
+        duration: globalDuration,
+        language:
+          message.subtask === "translate"
+            ? "en"
+            : message.language || undefined,
       },
     });
   } catch (error) {
@@ -659,20 +847,42 @@ class AutomaticSpeechRecognitionPipelineFactory extends PipelineFactory {
   static gpu = false;
 }
 
-const transcribe = async ({ audio, formatForCaptions, model, revision, dtype, gpu, subtask, language, duration, signal }) => {
+const transcribe = async ({
+  audio,
+  formatForCaptions,
+  model,
+  revision,
+  dtype,
+  gpu,
+  subtask,
+  language,
+  duration,
+  signal,
+}) => {
   if (model === "parakeet.wgsl") {
     return transcribeWithParakeet({ audio, formatForCaptions, signal });
   }
 
   // Supply chain validation: ensure any model loaded from Hugging Face is pinned to an immutable 40-character commit SHA
-  if (!revision || typeof revision !== "string" || !/^[0-9a-f]{40}$/i.test(revision)) {
-    throw new Error(`Untrusted or unpinned model revision for "${model}". Model weights must be pinned to an immutable 40-character commit hash.`);
+  if (
+    !revision ||
+    typeof revision !== "string" ||
+    !/^[0-9a-f]{40}$/i.test(revision)
+  ) {
+    throw new Error(
+      `Untrusted or unpinned model revision for "${model}". Model weights must be pinned to an immutable 40-character commit hash.`,
+    );
   }
 
   const isDistilWhisper = model.startsWith("distil-whisper/");
 
   const p = AutomaticSpeechRecognitionPipelineFactory;
-  if (p.model !== model || p.revision !== revision || p.dtype !== dtype || p.gpu !== gpu) {
+  if (
+    p.model !== model ||
+    p.revision !== revision ||
+    p.dtype !== dtype ||
+    p.gpu !== gpu
+  ) {
     // Invalidate model if different model, revision, dtype, or gpu setting
     p.model = model;
     p.revision = revision;
@@ -770,7 +980,7 @@ const transcribe = async ({ audio, formatForCaptions, model, revision, dtype, gp
     return_timestamps: true,
     force_full_sequences: false,
     condition_on_previous_text: false, // Prevents Whisper from getting stuck in repetition loops
-    no_repeat_ngram_size: 3,           // Further hallucination suppression
+    no_repeat_ngram_size: 3, // Further hallucination suppression
     streamer,
   }).catch((error) => {
     console.error(error);
@@ -783,12 +993,17 @@ const transcribe = async ({ audio, formatForCaptions, model, revision, dtype, gp
 
   if (output === null) return null;
 
+  const cleanedChunks = (output.chunks ?? chunks).map((c) => ({
+    ...c,
+    text: c.text.replace(/^[\s\-—–]+/, ""),
+  }));
+
   return {
     tps,
     duration,
     ...output,
     chunks: formatForCaptions
-      ? toCaptionChunks(output.chunks ?? chunks)
-      : output.chunks ?? chunks,
+      ? toCaptionChunks(cleanedChunks)
+      : cleanedChunks,
   };
 };

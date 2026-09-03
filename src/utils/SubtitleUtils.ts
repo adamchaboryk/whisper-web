@@ -1,6 +1,22 @@
 const SANITIZE_CACHE_MAX_SIZE = 2000;
 const sanitizeCache = new Map<string, string>();
 
+let sharedDOMParser: DOMParser | null = null;
+function getSharedDOMParser(): DOMParser | null {
+  if (sharedDOMParser === null && typeof DOMParser !== "undefined") {
+    sharedDOMParser = new DOMParser();
+  }
+  return sharedDOMParser;
+}
+
+const escapePlainText = (str: string): string =>
+  str
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+
 /**
  * Sanitizes an HTML string to only allow safe subtitle formatting tags (b, i, u)
  * and strips all executable scripts, event handlers, and dangerous tags.
@@ -16,71 +32,89 @@ export const sanitizeHTML = (html: string): string => {
     return cached;
   }
 
-  if (typeof DOMParser === "undefined") {
-    return html
-      .replace(/&/g, "&amp;")
-      .replace(/</g, "&lt;")
-      .replace(/>/g, "&gt;")
-      .replace(/"/g, "&quot;")
-      .replace(/'/g, "&#39;");
+  const parser = getSharedDOMParser();
+  if (!parser) {
+    return escapePlainText(html);
   }
 
-  const doc = new DOMParser().parseFromString(html, "text/html");
+  let result = "";
 
-  const walk = (node: Node): string => {
-    if (node.nodeType === Node.TEXT_NODE) {
-      return (node.textContent || "")
-        .replace(/&/g, "&amp;")
-        .replace(/</g, "&lt;")
-        .replace(/>/g, "&gt;");
-    }
-    if (node.nodeType === Node.ELEMENT_NODE) {
-      const el = node as HTMLElement;
-      const tag = el.tagName.toLowerCase();
-      let inner = "";
-      for (const child of Array.from(el.childNodes)) {
-        inner += walk(child);
-      }
+  try {
+    const doc = parser.parseFromString(html, "text/html");
 
-      if (tag === "b" || tag === "strong") {
-        return `<b>${inner}</b>`;
+    const walk = (node: Node): string => {
+      if (node.nodeType === Node.TEXT_NODE) {
+        return (node.textContent || "")
+          .replace(/&/g, "&amp;")
+          .replace(/</g, "&lt;")
+          .replace(/>/g, "&gt;");
       }
-      if (tag === "i" || tag === "em") {
-        return `<i>${inner}</i>`;
-      }
-      if (tag === "u") {
-        return `<u>${inner}</u>`;
-      }
-      if (tag === "br") {
-        return `\n`;
-      }
-      if (tag === "div" || tag === "p") {
-        return inner ? `\n${inner}` : `\n`;
-      }
-      if (tag === "span" || tag === "font") {
-        const style = el.style;
-        if (style) {
-          if (style.fontWeight === "bold" || style.fontWeight >= "700") {
-            inner = `<b>${inner}</b>`;
-          }
-          if (style.fontStyle === "italic") {
-            inner = `<i>${inner}</i>`;
-          }
-          if (typeof style.textDecoration === "string" && style.textDecoration.includes("underline")) {
-            inner = `<u>${inner}</u>`;
-          }
+      if (node.nodeType === Node.ELEMENT_NODE) {
+        const el = node as HTMLElement;
+        const tag = el.tagName ? el.tagName.toLowerCase() : "";
+        let inner = "";
+
+        // Use linked-list traversal rather than Array.from(el.childNodes)
+        // to prevent DOM-clobbered form controls (e.g. <input name="childNodes">)
+        // from breaking iteration or throwing uncaught exceptions.
+        let child = node.firstChild;
+        while (child) {
+          inner += walk(child);
+          child = child.nextSibling;
         }
+
+        if (tag === "b" || tag === "strong") {
+          return `<b>${inner}</b>`;
+        }
+        if (tag === "i" || tag === "em") {
+          return `<i>${inner}</i>`;
+        }
+        if (tag === "u") {
+          return `<u>${inner}</u>`;
+        }
+        if (tag === "br") {
+          return `\n`;
+        }
+        if (tag === "div" || tag === "p") {
+          return inner ? `\n${inner}` : `\n`;
+        }
+        if (tag === "span" || tag === "font") {
+          const style = "style" in el ? el.style : undefined;
+          if (style) {
+            if (
+              style.fontWeight === "bold" ||
+              style.fontWeight >= "700"
+            ) {
+              inner = `<b>${inner}</b>`;
+            }
+            if (style.fontStyle === "italic") {
+              inner = `<i>${inner}</i>`;
+            }
+            if (
+              typeof style.textDecoration === "string" &&
+              style.textDecoration.includes("underline")
+            ) {
+              inner = `<u>${inner}</u>`;
+            }
+          }
+          return inner;
+        }
+
         return inner;
       }
+      return "";
+    };
 
-      return inner;
+    const body = doc.body;
+    if (body) {
+      let child = body.firstChild;
+      while (child) {
+        result += walk(child);
+        child = child.nextSibling;
+      }
     }
-    return "";
-  };
-
-  let result = "";
-  for (const child of Array.from(doc.body.childNodes)) {
-    result += walk(child);
+  } catch {
+    result = escapePlainText(html);
   }
 
   if (sanitizeCache.size >= SANITIZE_CACHE_MAX_SIZE) {
@@ -94,16 +128,16 @@ export const sanitizeHTML = (html: string): string => {
   return result;
 };
 
-export function parseSubtitleFile(text: string, type: 'srt' | 'vtt') {
+export function parseSubtitleFile(text: string, type: "srt" | "vtt") {
   const chunks: { text: string; timestamp: [number, number | null] }[] = [];
   const lines = text.split(/\r?\n/);
 
   let i = 0;
 
-  if (type === 'vtt') {
+  if (type === "vtt") {
     // Skip WEBVTT header and optional metadata
-    while (i < lines.length && !lines[i].includes('-->')) {
-      if (lines[i].startsWith('WEBVTT')) {
+    while (i < lines.length && !lines[i].includes("-->")) {
+      if (lines[i].startsWith("WEBVTT")) {
         i++;
       } else {
         i++;
@@ -112,20 +146,24 @@ export function parseSubtitleFile(text: string, type: 'srt' | 'vtt') {
   }
 
   const timeToSeconds = (timeStr: string) => {
-    const parts = timeStr.trim().split(':');
+    const parts = timeStr.trim().split(":");
     let seconds = 0;
 
     // Check if it has hours
     if (parts.length === 3) {
       const h = parseInt(parts[0], 10);
       const m = parseInt(parts[1], 10);
-      const s = parseFloat(parts[2].replace(',', '.'));
-      if (Number.isFinite(h) && Number.isFinite(m) && Number.isFinite(s)) {
+      const s = parseFloat(parts[2].replace(",", "."));
+      if (
+        Number.isFinite(h) &&
+        Number.isFinite(m) &&
+        Number.isFinite(s)
+      ) {
         seconds = h * 3600 + m * 60 + s;
       }
     } else if (parts.length === 2) {
       const m = parseInt(parts[0], 10);
-      const s = parseFloat(parts[1].replace(',', '.'));
+      const s = parseFloat(parts[1].replace(",", "."));
       if (Number.isFinite(m) && Number.isFinite(s)) {
         seconds = m * 60 + s;
       }
@@ -137,36 +175,36 @@ export function parseSubtitleFile(text: string, type: 'srt' | 'vtt') {
     const line = lines[i].trim();
 
     // Skip empty lines or sequence numbers
-    if (!line || (!line.includes('-->') && !isNaN(Number(line)))) {
+    if (!line || (!line.includes("-->") && !isNaN(Number(line)))) {
       i++;
       continue;
     }
 
-    if (line.includes('-->')) {
-      const [start, end] = line.split('-->');
+    if (line.includes("-->")) {
+      const [start, end] = line.split("-->");
       const startTime = timeToSeconds(start);
       const endTime = timeToSeconds(end);
 
       i++;
-      let textChunk = '';
+      let textChunk = "";
 
       // Collect text lines until an empty line
-      while (i < lines.length && lines[i].trim() !== '') {
+      while (i < lines.length && lines[i].trim() !== "") {
         const cleanText = sanitizeHTML(lines[i]);
-        textChunk += (textChunk ? '\n' : '') + cleanText;
+        textChunk += (textChunk ? "\n" : "") + cleanText;
         i++;
       }
 
       chunks.push({
         text: textChunk,
-        timestamp: [startTime, endTime]
+        timestamp: [startTime, endTime],
       });
     } else {
       i++;
     }
   }
 
-  const fullText = chunks.map(c => c.text).join(' ');
+  const fullText = chunks.map((c) => c.text).join(" ");
   return { chunks, text: fullText };
 }
 
@@ -179,42 +217,160 @@ const INTER_SUBTITLE_GAP = 0.084; // Inter-Subtitle Gap: 2 to 3 frames (~84ms at
 const TARGET_CPS = 16.0; // Standard Dialogue reading speed: 15-17 CPS
 const MAX_CPS = 20.0; // Fast Dialogue Max reading speed: 20 CPS
 
+const VISIBLE_LENGTH_CACHE_MAX_SIZE = 2000;
+const visibleLengthCache = new Map<string, number>();
+
 /**
  * Returns visible character length ignoring HTML/VTT tags and entities
+ * using the browser's native parser to avoid flawed regex sanitization.
  */
 export function getVisibleLength(str: string): number {
-  return str.replace(/<[^>]+>/g, '').replace(/&(amp|lt|gt|quot|#39);/g, 'x').length;
+  if (!str) return 0;
+
+  // Fast path: pure text without tags or HTML entities needs no DOM parsing
+  if (!str.includes("<") && !str.includes("&")) {
+    return str.length;
+  }
+
+  const cached = visibleLengthCache.get(str);
+  if (cached !== undefined) {
+    return cached;
+  }
+
+  let length = str.length;
+  const parser = getSharedDOMParser();
+
+  if (parser) {
+    try {
+      const doc = parser.parseFromString(str, "text/html");
+      length = (doc.body?.textContent || "").length;
+    } catch {
+      length = str.replace(/<[^>]+>/g, "").length;
+    }
+  } else {
+    // Fallback if DOMParser is unavailable (e.g. Node/SSR)
+    length = str.replace(/<[^>]+>/g, "").length;
+  }
+
+  if (visibleLengthCache.size >= VISIBLE_LENGTH_CACHE_MAX_SIZE) {
+    const firstKey = visibleLengthCache.keys().next().value;
+    if (firstKey !== undefined) {
+      visibleLengthCache.delete(firstKey);
+    }
+  }
+  visibleLengthCache.set(str, length);
+
+  return length;
 }
 
 const CONJUNCTIONS = new Set([
-  "and", "but", "or", "nor", "for", "yet", "so",
-  "because", "although", "though", "while", "since",
-  "unless", "whereas", "which", "that", "who", "whom", "whose",
-  "when", "whenever", "where", "wherever", "if", "whether", "as"
+  "and",
+  "but",
+  "or",
+  "nor",
+  "for",
+  "yet",
+  "so",
+  "because",
+  "although",
+  "though",
+  "while",
+  "since",
+  "unless",
+  "whereas",
+  "which",
+  "that",
+  "who",
+  "whom",
+  "whose",
+  "when",
+  "whenever",
+  "where",
+  "wherever",
+  "if",
+  "whether",
+  "as",
 ]);
 
 const PREPOSITIONS = new Set([
-  "in", "on", "at", "to", "from", "with", "by", "about",
-  "into", "through", "during", "before", "after", "above",
-  "below", "between", "under", "over", "of", "off", "out"
+  "in",
+  "on",
+  "at",
+  "to",
+  "from",
+  "with",
+  "by",
+  "about",
+  "into",
+  "through",
+  "during",
+  "before",
+  "after",
+  "above",
+  "below",
+  "between",
+  "under",
+  "over",
+  "of",
+  "off",
+  "out",
 ]);
 
 const ARTICLES_AND_DETERMINERS = new Set([
-  "a", "an", "the", "this", "that", "these", "those"
+  "a",
+  "an",
+  "the",
+  "this",
+  "that",
+  "these",
+  "those",
 ]);
 
 const POSSESSIVES = new Set([
-  "my", "your", "his", "her", "its", "our", "their"
+  "my",
+  "your",
+  "his",
+  "her",
+  "its",
+  "our",
+  "their",
 ]);
 
 const HONORIFICS = new Set([
-  "mr.", "mrs.", "ms.", "dr.", "prof.", "sr.", "jr.", "st."
+  "mr.",
+  "mrs.",
+  "ms.",
+  "dr.",
+  "prof.",
+  "sr.",
+  "jr.",
+  "st.",
 ]);
 
 const AUXILIARY_VERBS = new Set([
-  "is", "am", "are", "was", "were", "be", "been", "being",
-  "have", "has", "had", "do", "does", "did",
-  "will", "would", "shall", "should", "can", "could", "may", "might", "must"
+  "is",
+  "am",
+  "are",
+  "was",
+  "were",
+  "be",
+  "been",
+  "being",
+  "have",
+  "has",
+  "had",
+  "do",
+  "does",
+  "did",
+  "will",
+  "would",
+  "shall",
+  "should",
+  "can",
+  "could",
+  "may",
+  "might",
+  "must",
 ]);
 
 /**
@@ -325,7 +481,10 @@ export function splitTextIntoPyramidLines(text: string): string {
   let line1 = "";
   let line2 = "";
   for (const word of words) {
-    if (!line1 || getVisibleLength(`${line1} ${word}`) <= MAX_LINE_CHARACTERS) {
+    if (
+      !line1 ||
+      getVisibleLength(`${line1} ${word}`) <= MAX_LINE_CHARACTERS
+    ) {
       line1 = line1 ? `${line1} ${word}` : word;
     } else {
       line2 = line2 ? `${line2} ${word}` : word;
@@ -345,8 +504,18 @@ export function splitTextIntoPyramidLines(text: string): string {
  * - Inter-subtitle gap: 2 to 3 frames (~84ms).
  * - Reading speed constraints: 15-17 CPS standard, max 20 CPS.
  */
-export function formatSrtChunks(chunks: { text: string; timestamp: [number, number | null] }[]) {
+const formatSrtCache = new WeakMap<
+  object,
+  { text: string; timestamp: [number, number] }[]
+>();
+
+export function formatSrtChunks(
+  chunks: { text: string; timestamp: [number, number | null] }[],
+) {
   if (!chunks.length) return [];
+
+  const cached = formatSrtCache.get(chunks);
+  if (cached) return cached;
 
   // 1. Flatten into linear words with interpolated timing
   interface WordTiming {
@@ -365,15 +534,20 @@ export function formatSrtChunks(chunks: { text: string; timestamp: [number, numb
     if (!words.length) continue;
 
     const sourceStart = chunk.timestamp[0];
-    const sourceEnd = chunk.timestamp[1] ?? (sourceStart + words.length * 0.4);
+    const sourceEnd =
+      chunk.timestamp[1] ?? sourceStart + words.length * 0.4;
     const sourceDuration = Math.max(0.2, sourceEnd - sourceStart);
     const totalChars = words.join(" ").length;
 
     let charOffset = 0;
     for (const word of words) {
-      const wordStart = sourceStart + (sourceDuration * charOffset) / Math.max(1, totalChars);
+      const wordStart =
+        sourceStart +
+        (sourceDuration * charOffset) / Math.max(1, totalChars);
       charOffset += word.length;
-      const wordEnd = sourceStart + (sourceDuration * charOffset) / Math.max(1, totalChars);
+      const wordEnd =
+        sourceStart +
+        (sourceDuration * charOffset) / Math.max(1, totalChars);
       charOffset += 1; // space
       allWords.push({
         word,
@@ -405,7 +579,8 @@ export function formatSrtChunks(chunks: { text: string; timestamp: [number, numb
     const candidateWords = [...currentWords, wordObj];
     const candidateText = candidateWords.map((w) => w.word).join(" ");
     const candidateLength = getVisibleLength(candidateText);
-    const candidateDuration = wordObj.end - (currentWords[0]?.start ?? wordObj.start);
+    const candidateDuration =
+      wordObj.end - (currentWords[0]?.start ?? wordObj.start);
 
     const isTerminalPunctuation = /[.!?]["'”)]?$/.test(wordObj.word);
     const isClausePunctuation = /[,;:\u2014-]["'”)]?$/.test(wordObj.word);
@@ -424,7 +599,11 @@ export function formatSrtChunks(chunks: { text: string; timestamp: [number, numb
     // Natural break at terminal punctuation if current event has reasonable length
     if (isTerminalPunctuation && candidateLength >= 20) {
       flushEvent();
-    } else if (isClausePunctuation && candidateLength >= 45 && candidateDuration >= 3.0) {
+    } else if (
+      isClausePunctuation &&
+      candidateLength >= 45 &&
+      candidateDuration >= 3.0
+    ) {
       flushEvent();
     }
   }
@@ -443,9 +622,16 @@ export function formatSrtChunks(chunks: { text: string; timestamp: [number, numb
 
     let duration = ev.end - ev.start;
     // Ensure duration meets minimum 1.0s and reading speed requirement
-    duration = Math.max(duration, MIN_SUBTITLE_DURATION, minReadingDuration);
+    duration = Math.max(
+      duration,
+      MIN_SUBTITLE_DURATION,
+      minReadingDuration,
+    );
     // Prefer target reading speed if duration was very brief
-    duration = Math.max(duration, Math.min(idealReadingDuration, MAX_SUBTITLE_DURATION));
+    duration = Math.max(
+      duration,
+      Math.min(idealReadingDuration, MAX_SUBTITLE_DURATION),
+    );
     // Cap at maximum on-screen duration (6 to 7 seconds)
     duration = Math.min(duration, MAX_SUBTITLE_DURATION);
 
@@ -464,20 +650,32 @@ export function formatSrtChunks(chunks: { text: string; timestamp: [number, numb
       // Ensure current ends before next start by at least INTER_SUBTITLE_GAP
       const maxCurrentEnd = next.timestamp[0] - INTER_SUBTITLE_GAP;
       if (current.timestamp[1] > maxCurrentEnd) {
-        if (maxCurrentEnd - current.timestamp[0] >= TECHNICAL_FLOOR_DURATION) {
-          current.timestamp[1] = Math.max(current.timestamp[0] + TECHNICAL_FLOOR_DURATION, maxCurrentEnd);
+        if (
+          maxCurrentEnd - current.timestamp[0] >=
+          TECHNICAL_FLOOR_DURATION
+        ) {
+          current.timestamp[1] = Math.max(
+            current.timestamp[0] + TECHNICAL_FLOOR_DURATION,
+            maxCurrentEnd,
+          );
         } else {
           // If spacing is extremely tight, push the next subtitle start
-          current.timestamp[1] = current.timestamp[0] + TECHNICAL_FLOOR_DURATION;
-          next.timestamp[0] = current.timestamp[1] + INTER_SUBTITLE_GAP;
-          if (next.timestamp[1] < next.timestamp[0] + TECHNICAL_FLOOR_DURATION) {
-            next.timestamp[1] = next.timestamp[0] + TECHNICAL_FLOOR_DURATION;
+          current.timestamp[1] =
+            current.timestamp[0] + TECHNICAL_FLOOR_DURATION;
+          next.timestamp[0] =
+            current.timestamp[1] + INTER_SUBTITLE_GAP;
+          if (
+            next.timestamp[1] <
+            next.timestamp[0] + TECHNICAL_FLOOR_DURATION
+          ) {
+            next.timestamp[1] =
+              next.timestamp[0] + TECHNICAL_FLOOR_DURATION;
           }
         }
       }
     }
   }
 
+  formatSrtCache.set(chunks, formattedEvents);
   return formattedEvents;
 }
-

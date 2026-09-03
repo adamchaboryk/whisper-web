@@ -8,6 +8,7 @@ export default defineConfig({
   experimental: {
     bundledDev: false,
   },
+
   plugins: [
     react(),
     tailwindcss(),

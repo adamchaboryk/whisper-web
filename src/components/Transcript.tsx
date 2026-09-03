@@ -1,4 +1,12 @@
-import { useRef, useEffect, useLayoutEffect, useState, useMemo, memo, useCallback } from "react";
+import {
+  useRef,
+  useEffect,
+  useLayoutEffect,
+  useState,
+  useMemo,
+  memo,
+  useCallback,
+} from "react";
 import {
   FloatingArrow,
   FloatingPortal,
@@ -13,14 +21,23 @@ import {
   useInteractions,
 } from "@floating-ui/react";
 import { SummaryData, TranscriberData } from "../hooks/useTranscriber";
-import { formatAudioTimestamp, formatSrtTimeRange, parseAudioTimestamp } from "../utils/AudioUtils";
+import {
+  formatAudioTimestamp,
+  formatSrtTimeRange,
+  parseAudioTimestamp,
+} from "../utils/AudioUtils";
 import { formatSrtChunks, sanitizeHTML } from "../utils/SubtitleUtils";
+import { resolveLanguageAndDirection } from "../utils/LanguageUtils";
 import { Spinner } from "./TranscribeButton";
 
 interface Props {
   transcribedData: TranscriberData | undefined;
   chunks?: TranscriberData["chunks"];
-  onChunkUpdate?: (index: number, updatedChunk: { text: string; timestamp: [number, number | null] }) => void;
+  language?: string;
+  onChunkUpdate?: (
+    index: number,
+    updatedChunk: { text: string; timestamp: [number, number | null] },
+  ) => void;
   onSeekTo?: (time: number) => void;
   isEditing?: boolean;
   onStartEditing?: () => void;
@@ -30,6 +47,7 @@ interface Props {
   onGenerateSummary?: () => void;
   supportsSummarizer?: boolean;
   currentTime?: number;
+  subscribeToTimeUpdate?: (subscriber: (time: number) => void) => () => void;
   isAutoScrollSettingEnabled?: boolean;
   setIsAutoScrollSettingEnabled?: (enabled: boolean) => void;
   playbackRate?: number;
@@ -103,6 +121,8 @@ function FilmIcon(props: { className?: string }) {
 function EditableChunk(props: {
   text: string;
   label: string;
+  dir?: "rtl" | "ltr";
+  lang?: string;
   onTextChange?: (text: string) => void;
 }) {
   const editorRef = useRef<HTMLDivElement>(null);
@@ -130,7 +150,9 @@ function EditableChunk(props: {
       const selection = window.getSelection();
       if (selection && selection.rangeCount) {
         selection.deleteFromDocument();
-        selection.getRangeAt(0).insertNode(document.createTextNode(text));
+        selection
+          .getRangeAt(0)
+          .insertNode(document.createTextNode(text));
         selection.collapseToEnd();
       }
     }
@@ -144,6 +166,8 @@ function EditableChunk(props: {
   return (
     <div
       ref={editorRef}
+      dir={props.dir}
+      lang={props.lang}
       className='flex-1 whitespace-pre-wrap rounded border border-dashed border-blue-300 bg-blue-50/60 px-2 py-1 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-solid dark:border-blue-400/50 dark:bg-blue-950/30'
       contentEditable
       suppressContentEditableWarning
@@ -162,7 +186,9 @@ function EditableTimestamp(props: {
   onTimestampChange?: (newTimestamp: number) => void;
 }) {
   const [prevTimestamp, setPrevTimestamp] = useState(props.timestamp);
-  const [value, setValue] = useState(() => formatAudioTimestamp(props.timestamp));
+  const [value, setValue] = useState(() =>
+    formatAudioTimestamp(props.timestamp),
+  );
 
   // Sync value when props.timestamp changes from outside
   if (props.timestamp !== prevTimestamp) {
@@ -183,10 +209,11 @@ function EditableTimestamp(props: {
 
   return (
     <input
-      type="text"
+      type='text'
+      dir='ltr'
       aria-label={props.label}
-      inputMode="numeric"
-      className='mr-5 shrink-0 w-20 text-left tabular-nums focus:outline-none focus:ring-2 focus:ring-blue-500 rounded border border-dashed border-blue-300 bg-blue-50/60 px-1 py-1 dark:border-blue-400/50 dark:bg-blue-950/30'
+      inputMode='numeric'
+      className='me-5 shrink-0 w-20 text-left tabular-nums focus:outline-none focus:ring-2 focus:ring-blue-500 rounded border border-dashed border-blue-300 bg-blue-50/60 px-1 py-1 dark:border-blue-400/50 dark:bg-blue-950/30'
       value={value}
       onChange={(e) => setValue(e.target.value)}
       onBlur={handleBlur}
@@ -219,7 +246,8 @@ function TimestampButton({
     <button
       ref={onMount}
       type='button'
-      className='timestamp-pill mr-5 shrink-0 text-left tabular-nums'
+      dir='ltr'
+      className='timestamp-pill me-5 shrink-0 text-left tabular-nums'
       onClick={onClick}
       onKeyDown={onKeyDown}
       tabIndex={tabIndex}
@@ -240,9 +268,17 @@ interface TranscriptSegmentProps {
   isActive: boolean;
   isEditing: boolean;
   tabIndex: number;
-  onChunkUpdate?: (index: number, updatedChunk: { text: string; timestamp: [number, number | null] }) => void;
+  lang?: string;
+  dir?: "rtl" | "ltr";
+  onChunkUpdate?: (
+    index: number,
+    updatedChunk: { text: string; timestamp: [number, number | null] },
+  ) => void;
   onSeekTo?: (time: number) => void;
-  onKeyDown: (event: React.KeyboardEvent<HTMLButtonElement>, index: number) => void;
+  onKeyDown: (
+    event: React.KeyboardEvent<HTMLButtonElement>,
+    index: number,
+  ) => void;
   onButtonMount: (element: HTMLButtonElement | null, index: number) => void;
   onContainerMount: (element: HTMLDivElement | null, index: number) => void;
   onTimestampHover?: (element: HTMLElement | null) => void;
@@ -254,6 +290,8 @@ const TranscriptSegment = memo(function TranscriptSegment({
   isActive,
   isEditing,
   tabIndex,
+  lang,
+  dir,
   onChunkUpdate,
   onSeekTo,
   onKeyDown,
@@ -261,7 +299,10 @@ const TranscriptSegment = memo(function TranscriptSegment({
   onContainerMount,
   onTimestampHover,
 }: TranscriptSegmentProps) {
-  const sanitizedText = useMemo(() => sanitizeHTML(chunk.text).trimStart(), [chunk.text]);
+  const sanitizedText = useMemo(
+    () => sanitizeHTML(chunk.text).trimStart(),
+    [chunk.text],
+  );
 
   return (
     <div
@@ -275,13 +316,20 @@ const TranscriptSegment = memo(function TranscriptSegment({
             timestamp={chunk.timestamp[0]}
             label={`Start time ${index + 1}`}
             onTimestampChange={(newTimestamp) => {
-              onChunkUpdate?.(index, { ...chunk, timestamp: [newTimestamp, chunk.timestamp[1]] });
+              onChunkUpdate?.(index, {
+                ...chunk,
+                timestamp: [newTimestamp, chunk.timestamp[1]],
+              });
             }}
           />
           <EditableChunk
             text={chunk.text.trimStart()}
             label={`Text ${index + 1}`}
-            onTextChange={(text) => onChunkUpdate?.(index, { ...chunk, text })}
+            lang={lang}
+            dir={dir}
+            onTextChange={(text) =>
+              onChunkUpdate?.(index, { ...chunk, text })
+            }
           />
         </>
       ) : (
@@ -311,14 +359,25 @@ function SaveButton(props: { onSave?: () => void; shortcut: string }) {
     open: isTooltipOpen,
     onOpenChange: setIsTooltipOpen,
     placement: "top",
-    // Floating UI reads this ref after render to calculate arrow placement.
-    // eslint-disable-next-line react-hooks/refs
-    middleware: [offset(10), flip(), shift({ padding: 8 }), arrow({ element: arrowRef })],
+    middleware: [
+      offset(10),
+      flip(),
+      shift({ padding: 8 }),
+      // Floating UI reads this ref after render to calculate arrow placement.
+      // eslint-disable-next-line react-hooks/refs
+      arrow({ element: arrowRef }),
+    ],
     whileElementsMounted: autoUpdate,
   });
-  const hover = useHover(context, { move: false, delay: { open: 800, close: 0 } });
+  const hover = useHover(context, {
+    move: false,
+    delay: { open: 800, close: 0 },
+  });
   const focus = useFocus(context);
-  const { getReferenceProps, getFloatingProps } = useInteractions([hover, focus]);
+  const { getReferenceProps, getFloatingProps } = useInteractions([
+    hover,
+    focus,
+  ]);
 
   return (
     <>
@@ -366,6 +425,74 @@ function SaveButton(props: { onSave?: () => void; shortcut: string }) {
   );
 }
 
+function EditButton(props: { onEdit?: () => void; shortcut: string }) {
+  const [isTooltipOpen, setIsTooltipOpen] = useState(false);
+  const arrowRef = useRef<SVGSVGElement>(null);
+  const { refs, floatingStyles, context } = useFloating({
+    open: isTooltipOpen,
+    onOpenChange: setIsTooltipOpen,
+    placement: "top",
+    middleware: [
+      offset(10),
+      flip(),
+      shift({ padding: 8 }),
+      // Floating UI reads this ref after render to calculate arrow placement.
+      // eslint-disable-next-line react-hooks/refs
+      arrow({ element: arrowRef }),
+    ],
+    whileElementsMounted: autoUpdate,
+  });
+  const hover = useHover(context, {
+    move: false,
+    delay: { open: 800, close: 0 },
+  });
+  const focus = useFocus(context);
+  const { getReferenceProps, getFloatingProps } = useInteractions([
+    hover,
+    focus,
+  ]);
+
+  return (
+    <>
+      <button
+        ref={refs.setReference}
+        type='button'
+        className='export-button gap-1.5'
+        onClick={props.onEdit}
+        aria-keyshortcuts='Meta+E Control+E'
+        {...getReferenceProps()}
+      >
+        <svg
+          aria-hidden='true'
+          viewBox='0 0 20 20'
+          fill='currentColor'
+          className='h-4 w-4'
+        >
+          <path d='m13.69 2.84 3.47 3.47-9.82 9.82-4.04.57.57-4.04 9.82-9.82Zm1.41-1.41a2 2 0 0 1 2.83 0l.64.64a2 2 0 0 1 0 2.83l-.71.71-3.47-3.47.71-.71Z' />
+        </svg>
+        Edit
+      </button>
+      {isTooltipOpen && (
+        <span
+          // Floating UI requires this callback ref to position the tooltip.
+          // eslint-disable-next-line react-hooks/refs
+          ref={refs.setFloating}
+          style={floatingStyles}
+          className='z-20 whitespace-nowrap rounded bg-slate-900 px-2 py-1 text-xs font-medium text-white shadow-lg dark:bg-slate-100 dark:text-slate-900'
+          {...getFloatingProps({ role: "tooltip" })}
+        >
+          <FloatingArrow
+            ref={arrowRef}
+            context={context}
+            className='fill-slate-900 dark:fill-slate-100'
+          />
+          {props.shortcut}
+        </span>
+      )}
+    </>
+  );
+}
+
 function PlaybackSpeedSelect(props: {
   playbackRate: number;
   onPlaybackRateChange: (rate: number) => void;
@@ -376,13 +503,24 @@ function PlaybackSpeedSelect(props: {
     open: isTooltipOpen,
     onOpenChange: setIsTooltipOpen,
     placement: "top",
-    // eslint-disable-next-line react-hooks/refs
-    middleware: [offset(10), flip(), shift({ padding: 8 }), arrow({ element: arrowRef })],
+    middleware: [
+      offset(10),
+      flip(),
+      shift({ padding: 8 }),
+      // eslint-disable-next-line react-hooks/refs
+      arrow({ element: arrowRef }),
+    ],
     whileElementsMounted: autoUpdate,
   });
-  const hover = useHover(context, { move: false, delay: { open: 800, close: 0 } });
+  const hover = useHover(context, {
+    move: false,
+    delay: { open: 800, close: 0 },
+  });
   const focus = useFocus(context);
-  const { getReferenceProps, getFloatingProps } = useInteractions([hover, focus]);
+  const { getReferenceProps, getFloatingProps } = useInteractions([
+    hover,
+    focus,
+  ]);
 
   return (
     <>
@@ -390,9 +528,11 @@ function PlaybackSpeedSelect(props: {
         ref={refs.setReference}
         className='form-select w-auto py-2 cursor-pointer'
         value={props.playbackRate}
-        id="playback"
-        onChange={(e) => props.onPlaybackRateChange(Number(e.target.value))}
-        aria-label="Playback speed"
+        id='playback'
+        onChange={(e) =>
+          props.onPlaybackRateChange(Number(e.target.value))
+        }
+        aria-label='Playback speed'
         {...getReferenceProps()}
       >
         <option value={0.5}>0.5x</option>
@@ -448,7 +588,8 @@ function findActiveChunkIndex(
     const start = chunks[mid].timestamp[0];
     const end =
       chunks[mid].timestamp[1] ??
-      (chunks[mid + 1]?.timestamp[0] ?? start + 5);
+      chunks[mid + 1]?.timestamp[0] ??
+      start + 5;
     if (currentTime < start) {
       high = mid - 1;
     } else if (currentTime >= end) {
@@ -463,6 +604,7 @@ function findActiveChunkIndex(
 const Transcript = memo(function Transcript({
   transcribedData,
   chunks: editedChunks,
+  language,
   onChunkUpdate,
   onSeekTo,
   isEditing,
@@ -473,6 +615,7 @@ const Transcript = memo(function Transcript({
   onGenerateSummary,
   supportsSummarizer,
   currentTime,
+  subscribeToTimeUpdate,
   isAutoScrollSettingEnabled = true,
   setIsAutoScrollSettingEnabled,
   playbackRate = 1,
@@ -490,43 +633,120 @@ const Transcript = memo(function Transcript({
     () => editedChunks ?? transcribedData?.chunks ?? [],
     [editedChunks, transcribedData?.chunks],
   );
-  const activeIndex = useMemo(
-    () => findActiveChunkIndex(chunks, currentTime),
-    [chunks, currentTime],
-  );
-  const saveShortcut = /Mac|iPhone|iPad|iPod/.test(navigator.userAgent) ? "Command + S" : "Ctrl + S";
 
-  const [tooltipTarget, setTooltipTarget] = useState<HTMLElement | null>(null);
+  const [internalActiveIndex, setInternalActiveIndex] = useState<number>(() =>
+    findActiveChunkIndex(chunks, currentTime),
+  );
+  const activeIndex =
+    subscribeToTimeUpdate !== undefined
+      ? internalActiveIndex
+      : findActiveChunkIndex(chunks, currentTime);
+
+  const chunksRef = useRef(chunks);
+  const activeIndexRef = useRef(activeIndex);
+  const isAutoScrollSettingEnabledRef = useRef(isAutoScrollSettingEnabled);
+  const isEditingRef = useRef(isEditing);
+  const autoScrollPausedRef = useRef(autoScrollPaused);
+
+  useLayoutEffect(() => {
+    chunksRef.current = chunks;
+    activeIndexRef.current = activeIndex;
+    isAutoScrollSettingEnabledRef.current = isAutoScrollSettingEnabled;
+    isEditingRef.current = isEditing;
+    autoScrollPausedRef.current = autoScrollPaused;
+  });
+
+  const rawText = transcribedData?.text;
+  const sampleTranscriptText = useMemo(() => {
+    if (rawText) {
+      return rawText.length > 1000 ? rawText.slice(0, 1000) : rawText;
+    }
+    if (chunks?.length) {
+      let text = "";
+      for (let i = 0; i < chunks.length && text.length < 1000; i++) {
+        text += (text ? " " : "") + chunks[i].text;
+      }
+      return text;
+    }
+    return "";
+  }, [rawText, chunks]);
+
+  const transcribedLanguage = transcribedData?.language;
+  const { language: transcriptLanguage, dir: transcriptDir } = useMemo(() => {
+    return resolveLanguageAndDirection(
+      sampleTranscriptText,
+      language || transcribedLanguage,
+    );
+  }, [sampleTranscriptText, language, transcribedLanguage]);
+
+  const { language: summaryLanguage, dir: summaryDir } = useMemo(() => {
+    if (!summary?.summary) {
+      return { language: transcriptLanguage, dir: transcriptDir };
+    }
+    return resolveLanguageAndDirection(summary.summary, transcriptLanguage);
+  }, [summary, transcriptLanguage, transcriptDir]);
+  const saveShortcut = /Mac|iPhone|iPad|iPod/.test(navigator.userAgent)
+    ? "Command + S"
+    : "Ctrl + S";
+  const editShortcut = /Mac|iPhone|iPad|iPod/.test(navigator.userAgent)
+    ? "Command + E"
+    : "Ctrl + E";
+
+  const [tooltipTarget, setTooltipTarget] = useState<HTMLElement | null>(
+    null,
+  );
   const arrowRef = useRef<SVGSVGElement>(null);
   const { refs, floatingStyles, context } = useFloating({
     open: Boolean(tooltipTarget),
     elements: { reference: tooltipTarget },
     placement: "top",
-    // eslint-disable-next-line react-hooks/refs
-    middleware: [offset(10), flip(), shift({ padding: 8 }), arrow({ element: arrowRef })],
+    middleware: [
+      offset(10),
+      flip(),
+      shift({ padding: 8 }),
+      // eslint-disable-next-line react-hooks/refs
+      arrow({ element: arrowRef }),
+    ],
     whileElementsMounted: autoUpdate,
   });
 
-  const handleKeyDown = useCallback((event: React.KeyboardEvent<HTMLButtonElement>, index: number) => {
-    const offset = event.key === "ArrowDown" ? 1 : event.key === "ArrowUp" ? -1 : 0;
-    if (offset) {
-      event.preventDefault();
-      timestampRefs.current[index + offset]?.focus();
-    }
-  }, []);
+  const handleKeyDown = useCallback(
+    (event: React.KeyboardEvent<HTMLButtonElement>, index: number) => {
+      const offset =
+        event.key === "ArrowDown"
+          ? 1
+          : event.key === "ArrowUp"
+            ? -1
+            : 0;
+      if (offset) {
+        event.preventDefault();
+        timestampRefs.current[index + offset]?.focus();
+      }
+    },
+    [],
+  );
 
-  const handleButtonRef = useCallback((element: HTMLButtonElement | null, index: number) => {
-    timestampRefs.current[index] = element;
-  }, []);
+  const handleButtonRef = useCallback(
+    (element: HTMLButtonElement | null, index: number) => {
+      timestampRefs.current[index] = element;
+    },
+    [],
+  );
 
-  const handleContainerRef = useCallback((element: HTMLDivElement | null, index: number) => {
-    chunkRefs.current[index] = element;
-  }, []);
+  const handleContainerRef = useCallback(
+    (element: HTMLDivElement | null, index: number) => {
+      chunkRefs.current[index] = element;
+    },
+    [],
+  );
 
-  const handleSeek = useCallback((time: number) => {
-    setAutoScrollPaused(false);
-    onSeekTo?.(time);
-  }, [onSeekTo]);
+  const handleSeek = useCallback(
+    (time: number) => {
+      setAutoScrollPaused(false);
+      onSeekTo?.(time);
+    },
+    [onSeekTo],
+  );
 
   const saveBlob = (blob: Blob, filename: string) => {
     const url = URL.createObjectURL(blob);
@@ -548,16 +768,16 @@ const Transcript = memo(function Transcript({
   };
 
   /*
-  const exportJSON = () => {
-    let jsonData = JSON.stringify(transcribedData?.chunks ?? [], null, 2);
+const exportJSON = () => {
+let jsonData = JSON.stringify(transcribedData?.chunks ?? [], null, 2);
 
-    // post-process the JSON to make it more readable
-    const regex = /( {4}"timestamp": )\[\s+(\S+)\s+(\S+)\s+\]/gm;
-    jsonData = jsonData.replace(regex, "$1[$2 $3]");
+// post-process the JSON to make it more readable
+const regex = /( {4}"timestamp": )\[\s+(\S+)\s+(\S+)\s+\]/gm;
+jsonData = jsonData.replace(regex, "$1[$2 $3]");
 
-    const blob = new Blob([jsonData], { type: "application/json" });
-    saveBlob(blob, "transcript.json");
-  }; */
+const blob = new Blob([jsonData], { type: "application/json" });
+saveBlob(blob, "transcript.json");
+}; */
 
   const exportSRT = () => {
     let srt = "";
@@ -574,7 +794,9 @@ const Transcript = memo(function Transcript({
     saveBlob(blob, "transcript.srt");
   };
 
-  const [copiedState, setCopiedState] = useState<"idle" | "copied" | "failed">("idle");
+  const [copiedState, setCopiedState] = useState<
+    "idle" | "copied" | "failed"
+  >("idle");
 
   useEffect(() => {
     if (copiedState === "idle") return;
@@ -624,14 +846,27 @@ const Transcript = memo(function Transcript({
             viewBox='0 0 24 24'
             aria-hidden='true'
           >
-            <path strokeLinecap='round' strokeLinejoin='round' strokeWidth={2.5} d='M5 13l4 4L19 7' />
+            <path
+              strokeLinecap='round'
+              strokeLinejoin='round'
+              strokeWidth={2.5}
+              d='M5 13l4 4L19 7'
+            />
           </svg>
         ) : (
           <ClipboardIcon className='h-4 w-4 shrink-0' />
         ),
     },
-    { name: "Export to TXT", onClick: exportTXT, icon: <DocumentTextIcon className='h-4 w-4 shrink-0' /> },
-    { name: "Export to SRT", onClick: exportSRT, icon: <FilmIcon className='h-4 w-4 shrink-0' /> },
+    {
+      name: "Export to TXT",
+      onClick: exportTXT,
+      icon: <DocumentTextIcon className='h-4 w-4 shrink-0' />,
+    },
+    {
+      name: "Export to SRT",
+      onClick: exportSRT,
+      icon: <FilmIcon className='h-4 w-4 shrink-0' />,
+    },
     // { name: "Export to JSON", onClick: exportJSON },
   ];
 
@@ -641,7 +876,9 @@ const Transcript = memo(function Transcript({
   const prevIsBusyRef = useRef<boolean | undefined>(undefined);
   const prevSummaryRef = useRef<string | undefined>(undefined);
   const scrollRafRef = useRef<number | null>(null);
-  const [lastAnnouncedProgress, setLastAnnouncedProgress] = useState<number | null>(null);
+  const [lastAnnouncedProgress, setLastAnnouncedProgress] = useState<
+    number | null
+  >(null);
 
   useEffect(() => {
     if (scrollRafRef.current) {
@@ -649,7 +886,10 @@ const Transcript = memo(function Transcript({
     }
 
     scrollRafRef.current = requestAnimationFrame(() => {
-      endOfMessagesRef.current?.scrollIntoView({ behavior: "auto", block: "end" });
+      endOfMessagesRef.current?.scrollIntoView({
+        behavior: "auto",
+        block: "end",
+      });
     });
 
     return () => {
@@ -677,25 +917,107 @@ const Transcript = memo(function Transcript({
   }, [summary?.summary]);
 
   useEffect(() => {
-    if (!transcribedData?.isBusy || transcribedData.progress === undefined) {
+    if (
+      !transcribedData?.isBusy ||
+      transcribedData.progress === undefined
+    ) {
       return;
     }
 
-    const milestoneProgress = Math.floor(transcribedData.progress / 20) * 20;
-    if (milestoneProgress >= 20 && milestoneProgress > (lastAnnouncedProgress ?? -20)) {
+    const milestoneProgress =
+      Math.floor(transcribedData.progress / 20) * 20;
+    if (
+      milestoneProgress >= 20 &&
+      milestoneProgress > (lastAnnouncedProgress ?? -20)
+    ) {
       setTimeout(() => {
         setLastAnnouncedProgress(milestoneProgress);
       }, 0);
     }
-  }, [transcribedData?.isBusy, transcribedData?.progress, lastAnnouncedProgress]);
+  }, [
+    transcribedData?.isBusy,
+    transcribedData?.progress,
+    lastAnnouncedProgress,
+  ]);
 
   useEffect(() => {
     if (transcribedData?.transcriptionSeconds !== undefined) {
-      console.warn(`Transcribed in ${formatTranscriptionDuration(transcribedData.transcriptionSeconds)}.`);
+      console.info(
+        `Transcribed in ${formatTranscriptionDuration(transcribedData.transcriptionSeconds)}.`,
+      );
     }
   }, [transcribedData?.transcriptionSeconds]);
 
+  const scrollToChunk = useCallback((index: number) => {
+    if (
+      isAutoScrollSettingEnabledRef.current &&
+      !isEditingRef.current &&
+      !autoScrollPausedRef.current &&
+      transcriptContainerRef.current &&
+      chunkRefs.current[index]
+    ) {
+      const container = transcriptContainerRef.current;
+      const chunkElement = chunkRefs.current[index];
+
+      if (chunkElement) {
+        requestAnimationFrame(() => {
+          const containerCenter = container.clientHeight / 2;
+          const chunkCenter = chunkElement.clientHeight / 2;
+          const scrollTop =
+            chunkElement.offsetTop -
+            containerCenter +
+            chunkCenter;
+          container.scrollTo({
+            top: scrollTop,
+            behavior: "smooth",
+          });
+        });
+      }
+    }
+  }, []);
+
   useEffect(() => {
+    if (!subscribeToTimeUpdate) return;
+
+    return subscribeToTimeUpdate((time: number) => {
+      // Detect audio seek (time jumped by more than 1.5 seconds)
+      if (
+        prevTimeRef.current !== undefined &&
+        Math.abs(time - prevTimeRef.current) > 1.5
+      ) {
+        setAutoScrollPaused(false);
+      }
+      prevTimeRef.current = time;
+
+      const currentChunks = chunksRef.current;
+      if (!currentChunks.length) return;
+
+      const nextIndex = findActiveChunkIndex(currentChunks, time);
+      if (nextIndex !== -1 && nextIndex !== activeIndexRef.current) {
+        activeIndexRef.current = nextIndex;
+        setInternalActiveIndex(nextIndex);
+        scrollToChunk(nextIndex);
+      } else if (nextIndex === -1 && activeIndexRef.current !== -1) {
+        activeIndexRef.current = -1;
+        setInternalActiveIndex(-1);
+      }
+    });
+  }, [subscribeToTimeUpdate, scrollToChunk]);
+
+  useEffect(() => {
+    if (
+      subscribeToTimeUpdate &&
+      chunks.length === 0 &&
+      activeIndexRef.current !== -1
+    ) {
+      activeIndexRef.current = -1;
+      setInternalActiveIndex(-1);
+    }
+  }, [chunks.length, subscribeToTimeUpdate]);
+
+  useEffect(() => {
+    if (subscribeToTimeUpdate) return;
+
     // Detect audio seek (time jumped by more than 1.5 seconds)
     if (currentTime !== undefined && prevTimeRef.current !== undefined) {
       if (Math.abs(currentTime - prevTimeRef.current) > 1.5) {
@@ -708,44 +1030,100 @@ const Transcript = memo(function Transcript({
 
     if (activeIndex !== -1 && activeIndex !== activeChunkIndexRef.current) {
       activeChunkIndexRef.current = activeIndex;
-
-      if (isAutoScrollSettingEnabled && !isEditing && !autoScrollPaused && transcriptContainerRef.current && chunkRefs.current[activeIndex]) {
-        const container = transcriptContainerRef.current;
-        const chunkElement = chunkRefs.current[activeIndex];
-
-        if (chunkElement) {
-          requestAnimationFrame(() => {
-            const containerCenter = container.clientHeight / 2;
-            const chunkCenter = chunkElement.clientHeight / 2;
-            const scrollTop = chunkElement.offsetTop - containerCenter + chunkCenter;
-            container.scrollTo({ top: scrollTop, behavior: 'smooth' });
-          });
-        }
-      }
+      scrollToChunk(activeIndex);
     }
-  }, [currentTime, chunks.length, activeIndex, isAutoScrollSettingEnabled, autoScrollPaused, isEditing]);
+  }, [
+    currentTime,
+    chunks.length,
+    activeIndex,
+    scrollToChunk,
+    subscribeToTimeUpdate,
+  ]);
 
   useEffect(() => {
-    if (!autoScrollPaused && isAutoScrollSettingEnabled && !isEditing && activeChunkIndexRef.current !== -1) {
+    const currentActive = subscribeToTimeUpdate
+      ? activeIndexRef.current
+      : activeChunkIndexRef.current;
+    if (
+      !autoScrollPaused &&
+      isAutoScrollSettingEnabled &&
+      !isEditing &&
+      currentActive !== -1
+    ) {
       const container = transcriptContainerRef.current;
-      const chunkElement = chunkRefs.current[activeChunkIndexRef.current];
+      const chunkElement = chunkRefs.current[currentActive];
 
       if (container && chunkElement) {
         requestAnimationFrame(() => {
           const containerCenter = container.clientHeight / 2;
           const chunkCenter = chunkElement.clientHeight / 2;
-          const scrollTop = chunkElement.offsetTop - containerCenter + chunkCenter;
-          container.scrollTo({ top: scrollTop, behavior: 'smooth' });
+          const scrollTop =
+            chunkElement.offsetTop - containerCenter + chunkCenter;
+          container.scrollTo({ top: scrollTop, behavior: "smooth" });
         });
       }
     }
-  }, [autoScrollPaused, isAutoScrollSettingEnabled, isEditing]);
+  }, [
+    autoScrollPaused,
+    isAutoScrollSettingEnabled,
+    isEditing,
+    subscribeToTimeUpdate,
+  ]);
+
+  const handleStartEditing = useCallback(() => {
+    onStartEditing?.();
+    requestAnimationFrame(() => {
+      transcriptContainerRef.current?.focus();
+    });
+  }, [onStartEditing]);
+
+  const prevIsEditingRef = useRef(isEditing);
+  useEffect(() => {
+    if (!prevIsEditingRef.current && isEditing) {
+      requestAnimationFrame(() => {
+        transcriptContainerRef.current?.focus();
+      });
+    }
+    prevIsEditingRef.current = isEditing;
+  }, [isEditing]);
+
+  useEffect(() => {
+    const handleGlobalKeyDown = (event: KeyboardEvent) => {
+      if (
+        isEditing &&
+        (event.metaKey || event.ctrlKey) &&
+        !event.altKey &&
+        event.key.toLowerCase() === "s"
+      ) {
+        event.preventDefault();
+        event.stopPropagation();
+        onSaveEdits?.();
+      } else if (isEditing && event.key === "Escape") {
+        event.preventDefault();
+        event.stopPropagation();
+        onCancelEdits?.();
+      } else if (
+        !isEditing &&
+        transcribedData &&
+        !transcribedData.isBusy &&
+        (event.metaKey || event.ctrlKey) &&
+        !event.altKey &&
+        event.key.toLowerCase() === "e"
+      ) {
+        event.preventDefault();
+        event.stopPropagation();
+        handleStartEditing();
+      }
+    };
+
+    window.addEventListener("keydown", handleGlobalKeyDown);
+    return () => {
+      window.removeEventListener("keydown", handleGlobalKeyDown);
+    };
+  }, [isEditing, onSaveEdits, onCancelEdits, handleStartEditing, transcribedData]);
 
   return (
-    <div
-      ref={divRef}
-      className='w-full flex flex-col p-4 overflow-y-auto'
-    >
+    <div ref={divRef} className='w-full flex flex-col p-4 overflow-y-auto'>
       {lastAnnouncedProgress !== null && transcribedData?.isBusy && (
         <p className='sr-only' role='status' aria-live='polite' aria-atomic='true'>
           {lastAnnouncedProgress}% complete.
@@ -756,9 +1134,9 @@ const Transcript = memo(function Transcript({
           <div className='w-full flex items-center justify-between gap-3'>
             <div className='flex items-center gap-4'>
               <h2
-                className="text-lg font-semibold tracking-tight text-slate-900 dark:text-slate-100 sm:text-2xl"
+                className='text-lg font-semibold tracking-tight text-slate-900 dark:text-slate-100 sm:text-2xl'
                 tabIndex={-1}
-                id="transcript-complete"
+                id='transcript-complete'
                 ref={headingRef}
               >
                 Transcript
@@ -773,7 +1151,10 @@ const Transcript = memo(function Transcript({
             <div className='flex items-center gap-3'>
               {isEditing ? (
                 <>
-                  <SaveButton onSave={onSaveEdits} shortcut={saveShortcut} />
+                  <SaveButton
+                    onSave={onSaveEdits}
+                    shortcut={saveShortcut}
+                  />
                   <button
                     type='button'
                     className='inline-flex items-center justify-center gap-2 rounded-md border-2 border-solid bg-red-100 px-4 py-2 text-sm font-semibold text-red-900 hover:bg-red-200 focus:outline-none focus-visible:ring-2 focus-visible:ring-red-500 focus-visible:ring-offset-2 transition-all duration-300'
@@ -783,20 +1164,13 @@ const Transcript = memo(function Transcript({
                   </button>
                 </>
               ) : (
-                <button type='button' className='export-button gap-1.5' onClick={onStartEditing}>
-                  <svg
-                    aria-hidden='true'
-                    viewBox='0 0 20 20'
-                    fill='currentColor'
-                    className='h-4 w-4'
-                  >
-                    <path d='m13.69 2.84 3.47 3.47-9.82 9.82-4.04.57.57-4.04 9.82-9.82Zm1.41-1.41a2 2 0 0 1 2.83 0l.64.64a2 2 0 0 1 0 2.83l-.71.71-3.47-3.47.71-.71Z' />
-                  </svg>
-                  Edit
-                </button>
+                <EditButton
+                  onEdit={handleStartEditing}
+                  shortcut={editShortcut}
+                />
               )}
             </div>
-          </div>
+          </div >
 
           <div
             className={`relative w-full mt-3 mb-2 rounded-lg overflow-hidden ${isEditing
@@ -810,15 +1184,46 @@ const Transcript = memo(function Transcript({
               tabIndex={0}
               role='region'
               aria-label='Transcript content'
-              onWheel={() => { setAutoScrollPaused(true); }}
-              onTouchMove={() => { setAutoScrollPaused(true); }}
-              onMouseLeave={() => { setAutoScrollPaused(false); }}
+              lang={transcriptLanguage}
+              dir={transcriptDir}
+              onWheel={() => {
+              }}
+              onMouseLeave={() => {
+                setAutoScrollPaused(false);
+              }}
               onKeyDown={(event) => {
                 if (isEditing && event.key === "Escape") {
                   event.preventDefault();
                   event.stopPropagation();
                   onCancelEdits?.();
-                } else if (["ArrowUp", "ArrowDown", "PageUp", "PageDown", "Home", "End", " "].includes(event.key)) {
+                } else if (
+                  isEditing &&
+                  (event.metaKey || event.ctrlKey) &&
+                  !event.altKey &&
+                  event.key.toLowerCase() === "s"
+                ) {
+                  event.preventDefault();
+                  event.stopPropagation();
+                  onSaveEdits?.();
+                } else if (
+                  !isEditing &&
+                  (event.metaKey || event.ctrlKey) &&
+                  !event.altKey &&
+                  event.key.toLowerCase() === "e"
+                ) {
+                  event.preventDefault();
+                  event.stopPropagation();
+                  handleStartEditing();
+                } else if (
+                  [
+                    "ArrowUp",
+                    "PageUp",
+                    "PageDown",
+                    "Home",
+                    "End",
+                    " ",
+                  ].includes(event.key)
+                ) {
                   setAutoScrollPaused(true);
                 }
               }}
@@ -831,6 +1236,8 @@ const Transcript = memo(function Transcript({
                   isActive={i === activeIndex}
                   isEditing={Boolean(isEditing)}
                   tabIndex={i > 0 ? -1 : 0}
+                  lang={transcriptLanguage}
+                  dir={transcriptDir}
                   onChunkUpdate={onChunkUpdate}
                   onSeekTo={handleSeek}
                   onKeyDown={handleKeyDown}
@@ -845,33 +1252,42 @@ const Transcript = memo(function Transcript({
               aria-hidden='true'
               className='pointer-events-none absolute inset-x-0 bottom-0 h-20 bg-gradient-to-t from-black/10 via-black/5 to-transparent dark:from-black/30 dark:via-black/15'
             />
-          </div>
+          </div >
 
-          {tooltipTarget && (
-            <FloatingPortal>
-              <span
-                ref={refs.setFloating}
-                style={floatingStyles}
-                className='z-20 whitespace-nowrap rounded bg-slate-900 px-2 py-1 text-xs font-medium text-white shadow-lg dark:bg-slate-100 dark:text-slate-900 pointer-events-none'
-                role='tooltip'
-              >
-                <FloatingArrow
-                  ref={arrowRef}
-                  context={context}
-                  className='fill-slate-900 dark:fill-slate-100'
-                />
-                Play from here
-              </span>
-            </FloatingPortal>
-          )}
+          {
+            tooltipTarget && (
+              <FloatingPortal>
+                <span
+                  ref={refs.setFloating}
+                  style={floatingStyles}
+                  className='z-20 whitespace-nowrap rounded bg-slate-900 px-2 py-1 text-xs font-medium text-white shadow-lg dark:bg-slate-100 dark:text-slate-900 pointer-events-none'
+                  role='tooltip'
+                >
+                  <FloatingArrow
+                    ref={arrowRef}
+                    context={context}
+                    className='fill-slate-900 dark:fill-slate-100'
+                  />
+                  Play from here
+                </span>
+              </FloatingPortal>
+            )
+          }
 
           <div className='w-full flex justify-end mb-5 pr-2'>
-            <label className='flex items-center gap-1.5 text-sm font-medium text-slate-500 dark:text-slate-400 cursor-pointer' htmlFor="auto-scroll">
+            <label
+              className='flex items-center gap-1.5 text-sm font-medium text-slate-500 dark:text-slate-400 cursor-pointer'
+              htmlFor='auto-scroll'
+            >
               <input
-                id="auto-scroll"
+                id='auto-scroll'
                 type='checkbox'
                 checked={isAutoScrollSettingEnabled}
-                onChange={(e) => setIsAutoScrollSettingEnabled?.(e.target.checked)}
+                onChange={(e) =>
+                  setIsAutoScrollSettingEnabled?.(
+                    e.target.checked,
+                  )
+                }
                 className='rounded border-slate-300 text-blue-600 focus:ring-blue-500 h-3.5 w-3.5 bg-slate-50 dark:bg-slate-700 dark:border-slate-500'
               />
               Auto-scroll transcript
@@ -879,7 +1295,12 @@ const Transcript = memo(function Transcript({
           </div>
 
           <div className='w-full mt-2 flex flex-wrap items-center justify-center gap-3'>
-            <span className='sr-only' role='status' aria-live='polite' aria-atomic='true'>
+            <span
+              className='sr-only'
+              role='status'
+              aria-live='polite'
+              aria-atomic='true'
+            >
               {copiedState === "copied"
                 ? "Transcript copied to clipboard"
                 : copiedState === "failed"
@@ -898,46 +1319,56 @@ const Transcript = memo(function Transcript({
             ))}
           </div>
 
-          {supportsSummarizer && !summary?.summary && (
-            <div className='w-full mt-2 flex flex-wrap items-center justify-center'>
-              <button
-                type='button'
-                onClick={onGenerateSummary}
-                disabled={summary?.isBusy}
-                className='export-button gap-1.5'
-              >
-                {summary?.isBusy ? (
-                  <Spinner text='Generating Summary...' />
-                ) : (
-                  <>
-                    <svg
-                      className='h-5 w-5'
-                      viewBox='0 0 20 20'
-                      fill='currentColor'
-                      aria-hidden='true'
-                    >
-                      <path d='M10 2a1 1 0 0 1 .967.744L11.99 6.9l4.156 1.023a1 1 0 0 1 0 1.942L11.99 10.9l-1.023 4.156a1 1 0 0 1-1.934 0L7.99 10.9l-4.156-1.023a1 1 0 0 1 0-1.942L7.99 6.9l1.043-4.156A1 1 0 0 1 10 2Z' />
-                      <path d='M4.5 14a.75.75 0 0 1 .728.568l.316 1.264 1.264.316a.75.75 0 0 1 0 1.456l-1.264.316-.316 1.264a.75.75 0 0 1-1.456 0l-.316-1.264-1.264-.316a.75.75 0 0 1 0-1.456l1.264-.316.316-1.264A.75.75 0 0 1 4.5 14Z' />
-                    </svg>
-                    Generate Summary
-                  </>
-                )}
-              </button>
-            </div>
-          )}
+          {
+            supportsSummarizer && !summary?.summary && (
+              <div className='w-full mt-2 flex flex-wrap items-center justify-center'>
+                <button
+                  type='button'
+                  onClick={onGenerateSummary}
+                  disabled={summary?.isBusy}
+                  className='export-button gap-1.5'
+                >
+                  {summary?.isBusy ? (
+                    <Spinner text='Generating Summary...' />
+                  ) : (
+                    <>
+                      <svg
+                        className='h-5 w-5'
+                        viewBox='0 0 20 20'
+                        fill='currentColor'
+                        aria-hidden='true'
+                      >
+                        <path d='M10 2a1 1 0 0 1 .967.744L11.99 6.9l4.156 1.023a1 1 0 0 1 0 1.942L11.99 10.9l-1.023 4.156a1 1 0 0 1-1.934 0L7.99 10.9l-4.156-1.023a1 1 0 0 1 0-1.942L7.99 6.9l1.043-4.156A1 1 0 0 1 10 2Z' />
+                        <path d='M4.5 14a.75.75 0 0 1 .728.568l.316 1.264 1.264.316a.75.75 0 0 1 0 1.456l-1.264.316-.316 1.264a.75.75 0 0 1-1.456 0l-.316-1.264-1.264-.316a.75.75 0 0 1 0-1.456l1.264-.316.316-1.264A.75.75 0 0 1 4.5 14Z' />
+                      </svg>
+                      Generate Summary
+                    </>
+                  )}
+                </button>
+              </div>
+            )
+          }
 
-          {summary?.summary && (
-            <div className='w-full mt-6'>
-              <h2
-                ref={summaryHeadingRef}
-                tabIndex={-1}
-                className="mt-5 text-lg font-semibold tracking-tight text-slate-900 dark:text-slate-100 sm:text-2xl"
+          {
+            summary?.summary && (
+              <div
+                className='w-full mt-6'
+                lang={summaryLanguage}
+                dir={summaryDir}
               >
-                Summary
-              </h2>
-              <p className='whitespace-pre-wrap text-slate-700 dark:text-slate-300'>{summary.summary}</p>
-            </div>
-          )}
+                <h2
+                  ref={summaryHeadingRef}
+                  tabIndex={-1}
+                  className='mt-5 text-lg font-semibold tracking-tight text-slate-900 dark:text-slate-100 sm:text-2xl'
+                >
+                  Summary
+                </h2>
+                <p className='whitespace-pre-wrap text-slate-700 dark:text-slate-300'>
+                  {summary.summary}
+                </p>
+              </div>
+            )
+          }
         </>
       )}
 
@@ -957,7 +1388,7 @@ const Transcript = memo(function Transcript({
         </div>
       )*/}
       <div ref={endOfMessagesRef} />
-    </div>
+    </div >
   );
 });
 

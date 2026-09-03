@@ -7,9 +7,11 @@ export default function AudioPlayer(props: {
   mimeType: string;
   isTranscribing: boolean;
   transcriptChunks?: { text: string; timestamp: [number, number | null] }[];
+  language?: string;
   onSeekReady?: (seekTo: (time: number) => void) => void;
   onTimeUpdate?: (time: number) => void;
   playbackRate?: number;
+  isEditing?: boolean;
 }) {
   const audioPlayer = useRef<HTMLAudioElement>(null);
   const videoPlayer = useRef<HTMLVideoElement>(null);
@@ -21,11 +23,8 @@ export default function AudioPlayer(props: {
     if (mediaPlayer && audioSource.current) {
       audioSource.current.src = props.audioUrl;
       mediaPlayer.load();
-      if (props.playbackRate) {
-        mediaPlayer.playbackRate = props.playbackRate;
-      }
     }
-  }, [props.audioUrl, props.playbackRate]);
+  }, [props.audioUrl]);
 
   // Updates playback rate
   useEffect(() => {
@@ -45,12 +44,12 @@ export default function AudioPlayer(props: {
     const audio = audioPlayer.current;
     const video = videoPlayer.current;
 
-    audio?.addEventListener('timeupdate', handleTimeUpdate);
-    video?.addEventListener('timeupdate', handleTimeUpdate);
+    audio?.addEventListener("timeupdate", handleTimeUpdate);
+    video?.addEventListener("timeupdate", handleTimeUpdate);
 
     return () => {
-      audio?.removeEventListener('timeupdate', handleTimeUpdate);
-      video?.removeEventListener('timeupdate', handleTimeUpdate);
+      audio?.removeEventListener("timeupdate", handleTimeUpdate);
+      video?.removeEventListener("timeupdate", handleTimeUpdate);
     };
   }, [onTimeUpdate]);
 
@@ -68,7 +67,12 @@ export default function AudioPlayer(props: {
   }, [onSeekReady]);
 
   const subtitleUrl = useMemo(() => {
-    if (!props.mimeType.startsWith("video/") || props.isTranscribing || !props.transcriptChunks?.length) {
+    if (
+      !props.mimeType.startsWith("video/") ||
+      props.isTranscribing ||
+      props.isEditing ||
+      !props.transcriptChunks?.length
+    ) {
       return undefined;
     }
 
@@ -81,8 +85,15 @@ export default function AudioPlayer(props: {
       })
       .join("\n\n");
 
-    return URL.createObjectURL(new Blob([`WEBVTT\n\n${cues}\n`], { type: "text/vtt" }));
-  }, [props.isTranscribing, props.mimeType, props.transcriptChunks]);
+    return URL.createObjectURL(
+      new Blob([`WEBVTT\n\n${cues}\n`], { type: "text/vtt" }),
+    );
+  }, [
+    props.isTranscribing,
+    props.isEditing,
+    props.mimeType,
+    props.transcriptChunks,
+  ]);
 
   useEffect(() => {
     return () => {
@@ -100,13 +111,21 @@ export default function AudioPlayer(props: {
           controls
           className='w-full max-h-96 rounded-lg bg-black shadow-xl shadow-black/5 ring-1 ring-slate-700/10 dark:ring-slate-500/30'
         >
-          <source ref={audioSource} type={props.mimeType}></source>
+          <source
+            ref={audioSource}
+            src={props.audioUrl}
+            type={props.mimeType}
+          />
           {subtitleUrl && (
             <track
               kind='captions'
               label='Transcript'
               src={subtitleUrl}
-              srcLang='en'
+              srcLang={
+                props.language && props.language !== "auto"
+                  ? props.language
+                  : "en"
+              }
               default
             />
           )}
@@ -117,7 +136,11 @@ export default function AudioPlayer(props: {
           controls
           className='w-full h-14 rounded-lg bg-white dark:bg-slate-700 shadow-xl shadow-black/5 ring-1 ring-slate-700/10 dark:ring-slate-500/30'
         >
-          <source ref={audioSource} type={props.mimeType}></source>
+          <source
+            ref={audioSource}
+            src={props.audioUrl}
+            type={props.mimeType}
+          />
         </audio>
       )}
     </div>

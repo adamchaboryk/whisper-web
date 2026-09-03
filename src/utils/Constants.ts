@@ -22,7 +22,8 @@ function mobileTabletCheck() {
   return check;
 }
 
-export const isIOS = typeof navigator !== "undefined" &&
+export const isIOS =
+  typeof navigator !== "undefined" &&
   (/iPad|iPhone|iPod/.test(navigator.userAgent || "") ||
     (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1));
 
@@ -133,6 +134,23 @@ export const LANGUAGES = {
 
 export const isMobileOrTablet = mobileTabletCheck();
 
+export const hasWebGpuSupport =
+  typeof navigator !== "undefined" &&
+  "gpu" in navigator &&
+  Boolean((navigator as Navigator & { gpu?: unknown }).gpu) &&
+  !isMobileOrTablet;
+
+let cachedSupportPromise: Promise<{ supported: boolean; reason?: string }> | null = null;
+
+export function getCachedWebGpuSupport(): Promise<{ supported: boolean; reason?: string }> {
+  if (!cachedSupportPromise) {
+    cachedSupportPromise = import("parakeet.wgsl")
+      .then((pkg) => pkg.checkSupport())
+      .catch(() => ({ supported: false }));
+  }
+  return cachedSupportPromise;
+}
+
 // Canonical SHA-256 hashes and immutable manifest URLs for NVIDIA Parakeet TDT 0.6B V2.
 // The parakeet.wgsl engine verifies these cryptographic hashes upon downloading model weights.
 export const PARAKEET_MODEL_HASHES = Object.freeze({
@@ -149,11 +167,35 @@ export const PARAKEET_MODEL_URLS = Object.freeze({
 // Revisions are pinned to immutable Git commit SHAs from the Hugging Face Hub,
 // or cryptographic SHA-256 hashes for Parakeet, to prevent supply chain attacks.
 export const MODELS: { [key: string]: [string, string, string] } = {
-  "parakeet.wgsl": ["NVIDIA Parakeet (Fast & Accurate)", "en", PARAKEET_MODEL_HASHES.fp16],
-  ...(isMobileOrTablet ? { "onnx-community/whisper-tiny": ["Whisper Tiny (Fastest)", "", "ff4177021cc41f7db950912b73ea4fdf7d01d8e7"] } : {}),
-  "onnx-community/whisper-base": ["Whisper Base (Fast & Light)", "", "1846881b6b3a3024392c1eea3ad983695bc23925"],
-  "onnx-community/whisper-small": ["Whisper Small (Balanced)", "", "36050c46d777d46dc4b5f43f6d90574fc38f8732"],
-  "onnx-community/whisper-large-v3-turbo": ["Whisper Large (Slower, but Best Quality)", "", "360ebcde2559d60bb474678be3c1de9ef347d01a"],
+  "parakeet.wgsl": [
+    "NVIDIA Parakeet (Fast & Accurate)",
+    "en",
+    PARAKEET_MODEL_HASHES.fp16,
+  ],
+  ...(isMobileOrTablet
+    ? {
+      "onnx-community/whisper-tiny": [
+        "Whisper Tiny (Fastest)",
+        "",
+        "ff4177021cc41f7db950912b73ea4fdf7d01d8e7",
+      ],
+    }
+    : {}),
+  "onnx-community/whisper-base": [
+    "Whisper Base (Fast & Light)",
+    "",
+    "1846881b6b3a3024392c1eea3ad983695bc23925",
+  ],
+  "onnx-community/whisper-small": [
+    "Whisper Small (Balanced)",
+    "",
+    "36050c46d777d46dc4b5f43f6d90574fc38f8732",
+  ],
+  "onnx-community/whisper-large-v3-turbo": [
+    "Whisper Large (Slower, but Best Quality)",
+    "",
+    "360ebcde2559d60bb474678be3c1de9ef347d01a",
+  ],
 };
 
 export const DTYPES: Record<string, string> = {
@@ -167,8 +209,6 @@ export enum AudioSource {
   FILE = "FILE",
   RECORDING = "RECORDING",
 }
-
-
 
 function getDefaultModel(language: string): string {
   if (isMobileOrTablet) {
@@ -191,5 +231,5 @@ export default {
   getDefaultLanguage,
   DEFAULT_QUANTIZED: isMobileOrTablet,
   DEFAULT_DTYPE: "q4",
-  DEFAULT_GPU: false,
+  DEFAULT_GPU: hasWebGpuSupport,
 };

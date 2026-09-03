@@ -10,12 +10,17 @@ import { parseSubtitleFile } from "../utils/SubtitleUtils";
 import Modal from "./modal/Modal";
 import AudioPlayer from "./AudioPlayer";
 import { TranscribeButton } from "./TranscribeButton";
-import Constants, {
-  AudioSource,
-  isMobileOrTablet,
-} from "../utils/Constants";
+import Constants, { AudioSource, isMobileOrTablet } from "../utils/Constants";
 import { Transcriber, TranscriberData } from "../hooks/useTranscriber";
-import { AnchorIcon, FolderIcon, MicrophoneIcon, InfoIcon, ThemeIcon, SettingsIcon } from '../utils/Icons';
+import {
+  AnchorIcon,
+  FolderIcon,
+  MicrophoneIcon,
+  InfoIcon,
+  ThemeIcon,
+  SettingsIcon,
+} from "../utils/Icons";
+import { isPrivateOrLocalHost } from "../utils/AudioUtils";
 
 const SettingsModal = React.lazy(() => import("./SettingsModal"));
 const RecordModal = React.lazy(() => import("./RecordModal"));
@@ -25,10 +30,11 @@ const INVALID_URL_SCHEME = "INVALID_URL_SCHEME";
 const INVALID_URL_FORMAT = "INVALID_URL_FORMAT";
 const INVALID_PRIVATE_URL = "INVALID_PRIVATE_URL";
 const FILE_TOO_LARGE = "FILE_TOO_LARGE";
+const AUDIO_TOO_LONG = "AUDIO_TOO_LONG";
+const SUSPECTED_DECOMPRESSION_BOMB = "SUSPECTED_DECOMPRESSION_BOMB";
 const MAX_AUDIO_DOWNLOAD_BYTES = 500 * 1024 * 1024; // 500 MB
-
-const PRIVATE_HOST_REGEX =
-  /^(localhost|127\.\d+\.\d+\.\d+|10\.\d+\.\d+\.\d+|172\.(1[6-9]|2\d|3[01])\.\d+\.\d+|192\.168\.\d+\.\d+|169\.254\.\d+\.\d+|0\.0\.0\.0|::1|\[::1\])$/i;
+const MAX_AUDIO_DURATION_SECONDS = 4 * 60 * 60; // 4 hours maximum
+const MIN_BYTES_PER_SECOND = 1000; // ~8 kbps minimum for long audio (>30m)
 
 // Sites known to serve web pages (not direct audio files) at their URLs, which would
 // otherwise surface as a confusing CORS/network error instead of an explanation.
@@ -44,7 +50,6 @@ const NON_AUDIO_HOSTNAMES = [
   "soundcloud.com",
   "spotify.com",
 ];
-
 
 function validateAudioUrl(rawUrl: string): URL {
   const trimmed = rawUrl.trim();
@@ -66,8 +71,7 @@ function validateAudioUrl(rawUrl: string): URL {
 
   // Allow same-origin resources (e.g. sample audio and sample video)
   if (parsedUrl.origin !== window.location.origin) {
-    const hostname = parsedUrl.hostname.toLowerCase();
-    if (PRIVATE_HOST_REGEX.test(hostname) || hostname.endsWith(".local") || hostname.endsWith(".internal")) {
+    if (isPrivateOrLocalHost(parsedUrl.hostname)) {
       throw new Error(INVALID_PRIVATE_URL);
     }
   }
@@ -89,6 +93,12 @@ function getAudioUrlErrorMessage(error: unknown): string {
     }
     if (error.message === FILE_TOO_LARGE) {
       return "The audio file exceeds the maximum allowed download size (500 MB). Please use a smaller file or extract the audio track first.";
+    }
+    if (error.message === AUDIO_TOO_LONG) {
+      return "The audio duration exceeds the maximum allowed length (4 hours). Please use a shorter file or split the audio first.";
+    }
+    if (error.message === SUSPECTED_DECOMPRESSION_BOMB) {
+      return "The audio file has an abnormally high compression ratio and cannot be safely decoded in the browser.";
     }
     if (error.message === INVALID_AUDIO_LINK) {
       return "That link doesn't point to a direct audio file (e.g., YouTube and other video site links aren't supported). Please use a direct link to an audio file, such as one ending in .mp3 or .wav.";
@@ -115,17 +125,76 @@ function getAudioUrlErrorMessage(error: unknown): string {
   }
 
   if (error instanceof DOMException) {
+    if (error.name === "QuotaExceededError") {
+      return "The file is too large for the browser's available memory. Try extracting the audio track (e.g. to MP3 or WAV) first.";
+    }
     return "The file at that URL couldn't be decoded as audio. Please check the link points directly to a valid audio file.";
   }
 
   return "Something went wrong while loading the audio. Please check the URL and try again.";
 }
 
+/**
+ * Probes the audio container header to determine duration without decompressing
+ * the full audio samples into memory, preventing decompression bomb OOM crashes.
+ */
+async function probeAudioMetadata(blob: Blob): Promise<{ duration: number }> {
+  return new Promise((resolve) => {
+    if (typeof document === "undefined") {
+      resolve({ duration: 0 });
+      return;
+    }
+    const audio = document.createElement("audio");
+    audio.preload = "metadata";
+    const objectUrl = URL.createObjectURL(blob);
 
-async function decodeAudioBuffer(arrayBuffer: ArrayBuffer): Promise<AudioBuffer> {
-  const audioCTX = typeof OfflineAudioContext !== "undefined"
-    ? new OfflineAudioContext(1, 1, Constants.SAMPLING_RATE)
-    : new AudioContext({ sampleRate: Constants.SAMPLING_RATE });
+    const cleanup = () => {
+      audio.removeAttribute("src");
+      audio.load();
+      URL.revokeObjectURL(objectUrl);
+    };
+
+    const timer = setTimeout(() => {
+      cleanup();
+      resolve({ duration: 0 });
+    }, 3000);
+
+    audio.onloadedmetadata = () => {
+      clearTimeout(timer);
+      const duration = audio.duration;
+      cleanup();
+      resolve({
+        duration:
+          Number.isFinite(duration) && duration > 0 ? duration : 0,
+      });
+    };
+
+    audio.onerror = () => {
+      clearTimeout(timer);
+      cleanup();
+      resolve({ duration: 0 });
+    };
+
+    audio.src = objectUrl;
+  });
+}
+
+function validateAudioMetadata(duration: number, byteLength: number): void {
+  if (duration > MAX_AUDIO_DURATION_SECONDS) {
+    throw new Error(AUDIO_TOO_LONG);
+  }
+  if (duration > 1800 && byteLength / duration < MIN_BYTES_PER_SECOND) {
+    throw new Error(SUSPECTED_DECOMPRESSION_BOMB);
+  }
+}
+
+async function decodeAudioBuffer(
+  arrayBuffer: ArrayBuffer,
+): Promise<AudioBuffer> {
+  const audioCTX =
+    typeof OfflineAudioContext !== "undefined"
+      ? new OfflineAudioContext(1, 1, Constants.SAMPLING_RATE)
+      : new AudioContext({ sampleRate: Constants.SAMPLING_RATE });
   try {
     return await audioCTX.decodeAudioData(arrayBuffer);
   } finally {
@@ -161,6 +230,7 @@ export const AudioManager = React.memo(function AudioManager(props: {
   onSeekReady?: (seekTo: (time: number) => void) => void;
   onTimeUpdate?: (time: number) => void;
   playbackRate?: number;
+  isEditing?: boolean;
 }) {
   const [isAudioProcessing, setIsAudioProcessing] = useState(false);
   const [audioReadyAnnouncement, setAudioReadyAnnouncement] = useState("");
@@ -198,7 +268,8 @@ export const AudioManager = React.memo(function AudioManager(props: {
       if (!chunks?.length || !audioDuration) return;
 
       const lastChunk = chunks[chunks.length - 1];
-      const transcriptDuration = lastChunk.timestamp[1] ?? lastChunk.timestamp[0] ?? 0;
+      const transcriptDuration =
+        lastChunk.timestamp[1] ?? lastChunk.timestamp[0] ?? 0;
       const diff = Math.abs(transcriptDuration - audioDuration);
 
       if (diff > Math.max(10, audioDuration * 0.1)) {
@@ -228,10 +299,13 @@ export const AudioManager = React.memo(function AudioManager(props: {
   }, [startTranscription]);
 
   const isTranscriptLengthMismatched = useMemo(() => {
-    if (!props.transcriptChunks?.length || !audioData?.buffer?.duration) return false;
+    if (!props.transcriptChunks?.length || !audioData?.buffer?.duration)
+      return false;
 
-    const lastChunk = props.transcriptChunks[props.transcriptChunks.length - 1];
-    const transcriptDuration = lastChunk.timestamp[1] ?? lastChunk.timestamp[0] ?? 0;
+    const lastChunk =
+      props.transcriptChunks[props.transcriptChunks.length - 1];
+    const transcriptDuration =
+      lastChunk.timestamp[1] ?? lastChunk.timestamp[0] ?? 0;
     const audioDuration = audioData.buffer.duration;
 
     const diff = Math.abs(transcriptDuration - audioDuration);
@@ -240,6 +314,13 @@ export const AudioManager = React.memo(function AudioManager(props: {
     return diff > Math.max(10, audioDuration * 0.1);
   }, [props.transcriptChunks, audioData]);
 
+  const isModelChanged = Boolean(
+    props.transcriber.output &&
+    !props.transcriber.isBusy &&
+    props.transcriber.output.model &&
+    props.transcriber.output.model !== props.transcriber.model,
+  );
+
   // Combine all in-flight model file downloads into a single byte-weighted percentage.
   const overallModelLoadProgress = useMemo(() => {
     const items = props.transcriber.progressItems;
@@ -247,13 +328,22 @@ export const AudioManager = React.memo(function AudioManager(props: {
       return 0;
     }
 
-    const totalBytes = items.reduce((sum, item) => sum + (item.total || 0), 0);
+    const totalBytes = items.reduce(
+      (sum, item) => sum + (item.total || 0),
+      0,
+    );
     if (totalBytes > 0) {
-      const loadedBytes = items.reduce((sum, item) => sum + (item.loaded || 0), 0);
+      const loadedBytes = items.reduce(
+        (sum, item) => sum + (item.loaded || 0),
+        0,
+      );
       return (loadedBytes / totalBytes) * 100;
     }
 
-    const totalProgress = items.reduce((sum, item) => sum + (item.progress || 0), 0);
+    const totalProgress = items.reduce(
+      (sum, item) => sum + (item.progress || 0),
+      0,
+    );
     return totalProgress / items.length;
   }, [props.transcriber.progressItems]);
 
@@ -286,15 +376,16 @@ export const AudioManager = React.memo(function AudioManager(props: {
   );
 
   const setAudioFromDownload = useCallback(
-    async (
-      data: ArrayBuffer,
-      mimeType: string,
-      isSampleVideo = false,
-    ) => {
+    async (data: ArrayBuffer, mimeType: string, isSampleVideo = false) => {
       const blob = new Blob([data], { type: mimeType });
       const blobUrl = URL.createObjectURL(blob);
       try {
+        const { duration } = await probeAudioMetadata(blob);
+        if (duration > 0) {
+          validateAudioMetadata(duration, blob.size);
+        }
         const decoded = await decodeAudioBuffer(data);
+        validateAudioMetadata(decoded.duration, blob.size);
         checkAndResetIfMismatched(decoded.duration);
         setAudioData({
           buffer: decoded,
@@ -316,31 +407,23 @@ export const AudioManager = React.memo(function AudioManager(props: {
   const setAudioFromRecording = async (data: Blob) => {
     resetAudio();
     const blobUrl = URL.createObjectURL(data);
-    const fileReader = new FileReader();
-    fileReader.onloadend = async () => {
-      try {
-        const arrayBuffer = fileReader.result as ArrayBuffer;
-        const decoded = await decodeAudioBuffer(arrayBuffer);
-        checkAndResetIfMismatched(decoded.duration);
-        setAudioData({
-          buffer: decoded,
-          blob: data,
-          sourceName: `recording.${data.type.split("/")[1]?.split(";")[0] || "webm"}`,
-          url: blobUrl,
-          source: AudioSource.RECORDING,
-          mimeType: data.type,
-        });
-      } catch (error) {
-        URL.revokeObjectURL(blobUrl);
-        console.error("Failed to decode recording:", error);
-        setAudioError("Failed to decode the microphone recording.");
-      }
-    };
-    fileReader.onerror = () => {
+    try {
+      const arrayBuffer = await data.arrayBuffer();
+      const decoded = await decodeAudioBuffer(arrayBuffer);
+      checkAndResetIfMismatched(decoded.duration);
+      setAudioData({
+        buffer: decoded,
+        blob: data,
+        sourceName: `recording.${data.type.split("/")[1]?.split(";")[0] || "webm"}`,
+        url: blobUrl,
+        source: AudioSource.RECORDING,
+        mimeType: data.type,
+      });
+    } catch (error) {
       URL.revokeObjectURL(blobUrl);
-      setAudioError("Failed to process the recording data.");
-    };
-    fileReader.readAsArrayBuffer(data);
+      console.error("Failed to decode recording:", error);
+      setAudioError("Failed to decode the microphone recording.");
+    }
   };
 
   const downloadAudioFromUrl = useCallback(
@@ -365,8 +448,11 @@ export const AudioManager = React.memo(function AudioManager(props: {
           throw new Error(`HTTP_${response.status}`);
         }
 
-        const contentLengthHeader = response.headers.get("content-length");
-        const contentLength = contentLengthHeader ? Number(contentLengthHeader) : 0;
+        const contentLengthHeader =
+          response.headers.get("content-length");
+        const contentLength = contentLengthHeader
+          ? Number(contentLengthHeader)
+          : 0;
         if (contentLength > MAX_AUDIO_DOWNLOAD_BYTES) {
           throw new Error(FILE_TOO_LARGE);
         }
@@ -415,13 +501,10 @@ export const AudioManager = React.memo(function AudioManager(props: {
           chunks.push(value);
         }
 
-        const combined = new Uint8Array(receivedBytes);
-        let offset = 0;
-        for (const chunk of chunks) {
-          combined.set(chunk, offset);
-          offset += chunk.byteLength;
-        }
-        const data = combined.buffer;
+        const blob = new Blob(chunks as BlobPart[], {
+          type: mimeType,
+        });
+        const data = await blob.arrayBuffer();
 
         if (!mimeType || mimeType === "audio/wave") {
           const pathname = parsedUrl.pathname.toLowerCase();
@@ -440,7 +523,9 @@ export const AudioManager = React.memo(function AudioManager(props: {
         await setAudioFromDownload(data, mimeType, isSampleVideo);
       } catch (error) {
         if (isSizeExceeded) {
-          setAudioError(getAudioUrlErrorMessage(new Error(FILE_TOO_LARGE)));
+          setAudioError(
+            getAudioUrlErrorMessage(new Error(FILE_TOO_LARGE)),
+          );
           return;
         }
 
@@ -503,8 +588,11 @@ export const AudioManager = React.memo(function AudioManager(props: {
 
   return (
     <>
-      <div className="relative flex flex-col items-center">
-        <div id='upload-toolbar' className='flex flex-col justify-center items-center rounded-lg bg-white dark:bg-slate-800 shadow-xl shadow-black/5 relative'>
+      <div className='relative flex flex-col items-center'>
+        <div
+          id='upload-toolbar'
+          className='flex flex-col justify-center items-center rounded-lg bg-white dark:bg-slate-800 shadow-xl shadow-black/5 relative'
+        >
           <div className='flex flex-row space-x-3 py-2 w-full px-2'>
             <UrlTile
               icon={<AnchorIcon />}
@@ -524,20 +612,47 @@ export const AudioManager = React.memo(function AudioManager(props: {
               onFileError={(error) => {
                 console.error("Failed to load file:", error);
                 setAudioError(
-                  error instanceof Error && error.message === FILE_TOO_LARGE
+                  error instanceof Error &&
+                    error.message === FILE_TOO_LARGE
                     ? "The file exceeds the maximum allowed size (500 MB). Please use a smaller file or extract the audio track first."
-                    : error instanceof DOMException && error.name === "QuotaExceededError"
-                      ? "The file is too large for the browser's available memory. Try extracting the audio track (e.g. to MP3 or WAV) first."
-                      : "The file could not be decoded as audio. Please check that it is a supported audio or video format."
+                    : error instanceof Error &&
+                      error.message === AUDIO_TOO_LONG
+                      ? "The audio duration exceeds the maximum allowed length (4 hours). Please use a shorter file or split the audio first."
+                      : error instanceof Error &&
+                        error.message ===
+                        SUSPECTED_DECOMPRESSION_BOMB
+                        ? "The audio file has an abnormally high compression ratio and cannot be safely decoded in the browser."
+                        : error instanceof DOMException &&
+                          error.name ===
+                          "QuotaExceededError"
+                          ? "The file is too large for the browser's available memory. Try extracting the audio track (e.g. to MP3 or WAV) first."
+                          : "The file could not be decoded as audio. Please check that it is a supported audio or video format.",
                 );
               }}
-              onFileUpdate={async (decoded, blob, sourceName, blobUrl, mimeType) => {
+              onFileUpdate={async (
+                decoded,
+                blob,
+                sourceName,
+                blobUrl,
+                mimeType,
+              ) => {
                 setAudioError(null);
 
-                if (!decoded && (mimeType === 'text/srt' || mimeType === 'text/vtt' || sourceName.endsWith('.srt') || sourceName.endsWith('.vtt'))) {
+                if (
+                  !decoded &&
+                  (mimeType === "text/srt" ||
+                    mimeType === "text/vtt" ||
+                    sourceName.endsWith(".srt") ||
+                    sourceName.endsWith(".vtt"))
+                ) {
                   const text = await blob.text();
-                  const type = sourceName.endsWith('.vtt') ? 'vtt' : 'srt';
-                  const parsed = parseSubtitleFile(text, type);
+                  const type = sourceName.endsWith(".vtt")
+                    ? "vtt"
+                    : "srt";
+                  const parsed = parseSubtitleFile(
+                    text,
+                    type,
+                  );
 
                   props.transcriber.setTranscript({
                     isBusy: false,
@@ -555,7 +670,9 @@ export const AudioManager = React.memo(function AudioManager(props: {
                     url: blobUrl,
                     source: AudioSource.FILE,
                     mimeType: mimeType,
-                    isSampleVideo: sourceName === "sample-video.mp4" || sourceName === "video-demo.webm",
+                    isSampleVideo:
+                      sourceName === "sample-video.mp4" ||
+                      sourceName === "video-demo.webm",
                   });
                 }
               }}
@@ -575,7 +692,9 @@ export const AudioManager = React.memo(function AudioManager(props: {
             )}
           </div>
         </div>
-        <div className={`absolute top-full left-1/2 -translate-x-1/2 flex justify-center transition-all duration-300 ${isHoveringFile ? 'translate-y-0 opacity-100' : '-translate-y-full opacity-0 pointer-events-none'}`}>
+        <div
+          className={`absolute top-full left-1/2 -translate-x-1/2 flex justify-center transition-all duration-300 ${isHoveringFile ? "translate-y-0 opacity-100" : "-translate-y-full opacity-0 pointer-events-none"}`}
+        >
           <div id='file-upload-ribbon' className='file-upload-ribbon'>
             Upload audio, video, or existing transcripts.
           </div>
@@ -601,7 +720,12 @@ export const AudioManager = React.memo(function AudioManager(props: {
         </button>
       </div>
 
-      <p className='sr-only' role='status' aria-live='polite' aria-atomic='true'>
+      <p
+        className='sr-only'
+        role='status'
+        aria-live='polite'
+        aria-atomic='true'
+      >
         {audioReadyAnnouncement}
       </p>
       {isAudioProcessing && (
@@ -618,176 +742,288 @@ export const AudioManager = React.memo(function AudioManager(props: {
           {audioError}
         </div>
       )}
-      {
-        audioData && (
-          <>
-            <AudioPlayer
-              audioUrl={audioData.url}
-              mimeType={audioData.mimeType}
-              isTranscribing={props.transcriber.isBusy}
-              transcriptChunks={props.transcriptChunks}
-              onSeekReady={props.onSeekReady}
-              onTimeUpdate={props.onTimeUpdate}
-              playbackRate={props.playbackRate}
-            />
+      {audioData && (
+        <>
+          <AudioPlayer
+            audioUrl={audioData.url}
+            mimeType={audioData.mimeType}
+            isTranscribing={props.transcriber.isBusy}
+            transcriptChunks={props.transcriptChunks}
+            language={
+              props.transcriber.output?.language ||
+              (props.transcriber.subtask === "translate"
+                ? "en"
+                : props.transcriber.language)
+            }
+            onSeekReady={props.onSeekReady}
+            onTimeUpdate={props.onTimeUpdate}
+            playbackRate={props.playbackRate}
+            isEditing={props.isEditing}
+          />
 
-            {audioData.isSampleVideo && (
-              <p className='text-xs text-slate-500 dark:text-slate-400 text-center -mt-2 mb-2'>
-                (Video source:{" "}
-                <a
-                  href='https://svs.gsfc.nasa.gov/15089/'
-                  target='_blank'
-                  rel='noreferrer'
-                  className='text-blue-600 dark:text-blue-400 underline hover:no-underline'
-                >
-                  NASA
-                </a>
-                )
-              </p>
-            )}
+          {audioData.isSampleVideo && (
+            <p className='text-xs text-slate-500 dark:text-slate-400 text-center -mt-2 mb-2'>
+              (Video source:{" "}
+              <a
+                href='https://svs.gsfc.nasa.gov/15089/'
+                target='_blank'
+                rel='noreferrer'
+                className='text-blue-600 dark:text-blue-400 underline hover:no-underline'
+              >
+                NASA
+              </a>
+              )
+            </p>
+          )}
 
-            <div className='relative w-full flex justify-center items-center mt-2 gap-3'>
-              {(!props.transcriber.output || props.transcriber.isBusy || isTranscriptLengthMismatched) && (
+          <div className='relative w-full flex justify-center items-center mt-2 gap-3'>
+            {(!props.transcriber.output ||
+              props.transcriber.isBusy ||
+              isTranscriptLengthMismatched ||
+              isModelChanged) && (
                 <TranscribeButton
                   ref={transcribeButtonRef}
                   onClick={handleTranscribeClick}
-                  isModelLoading={props.transcriber.isModelLoading}
+                  isModelLoading={
+                    props.transcriber.isModelLoading
+                  }
                   modelLoadingProgress={overallModelLoadProgress}
                   isTranscribing={props.transcriber.isBusy}
-                  transcribingProgress={props.transcriber.output?.progress}
+                  transcribingProgress={
+                    props.transcriber.output?.progress
+                  }
                 />
               )}
-            </div>
+          </div>
 
-            {props.transcriber.errorMessage && (
-              <div
-                role='alert'
-                aria-live='assertive'
-                className='w-full max-w-xl mx-auto mt-4 p-4 flex items-start justify-between gap-3 text-sm font-medium text-red-900 bg-red-50 border border-red-200 rounded-xl dark:bg-red-950/70 dark:text-red-200 dark:border-red-800 shadow-sm'
-              >
-                <div className='flex items-start gap-3 min-w-0'>
-                  <svg
-                    className='w-5 h-5 shrink-0 text-red-600 dark:text-red-400 mt-0.5'
-                    fill='none'
-                    stroke='currentColor'
-                    viewBox='0 0 24 24'
-                    aria-hidden='true'
-                  >
-                    <path
-                      strokeLinecap='round'
-                      strokeLinejoin='round'
-                      strokeWidth={2}
-                      d='M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z'
-                    />
-                  </svg>
-                  <div className='min-w-0 flex-1'>
-                    <p className='font-semibold text-red-950 dark:text-red-100'>Transcription failed</p>
-                    <p className='mt-0.5 text-red-800 dark:text-red-300 font-normal break-words'>
-                      {props.transcriber.errorMessage}
-                    </p>
-                  </div>
-                </div>
-                <button
-                  type='button'
-                  onClick={() => props.transcriber.setErrorMessage(undefined)}
-                  aria-label='Dismiss error'
-                  className='inline-flex shrink-0 p-1.5 rounded-lg text-red-700 hover:bg-red-200/50 dark:text-red-300 dark:hover:bg-red-900/50 focus:outline-none focus-visible:ring-2 focus-visible:ring-red-500 transition-colors'
+          {props.transcriber.errorMessage && (
+            <div
+              role='alert'
+              aria-live='assertive'
+              className='w-full max-w-xl mx-auto mt-4 p-4 flex items-start justify-between gap-3 text-sm font-medium text-red-900 bg-red-50 border border-red-200 rounded-xl dark:bg-red-950/70 dark:text-red-200 dark:border-red-800 shadow-sm'
+            >
+              <div className='flex items-start gap-3 min-w-0'>
+                <svg
+                  className='w-5 h-5 shrink-0 text-red-600 dark:text-red-400 mt-0.5'
+                  fill='none'
+                  stroke='currentColor'
+                  viewBox='0 0 24 24'
+                  aria-hidden='true'
                 >
-                  <svg className='w-4 h-4' fill='none' stroke='currentColor' viewBox='0 0 24 24' aria-hidden='true'>
-                    <path strokeLinecap='round' strokeLinejoin='round' strokeWidth={2} d='M6 18L18 6M6 6l12 12' />
-                  </svg>
-                </button>
+                  <path
+                    strokeLinecap='round'
+                    strokeLinejoin='round'
+                    strokeWidth={2}
+                    d='M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z'
+                  />
+                </svg>
+                <div className='min-w-0 flex-1'>
+                  <p className='font-semibold text-red-950 dark:text-red-100'>
+                    Transcription failed
+                  </p>
+                  <p className='mt-0.5 text-red-800 dark:text-red-300 font-normal break-words'>
+                    {props.transcriber.errorMessage}
+                  </p>
+                </div>
               </div>
-            )}
-          </>
-        )
-      }
+              <button
+                type='button'
+                onClick={() =>
+                  props.transcriber.setErrorMessage(undefined)
+                }
+                aria-label='Dismiss error'
+                className='inline-flex shrink-0 p-1.5 rounded-lg text-red-700 hover:bg-red-200/50 dark:text-red-300 dark:hover:bg-red-900/50 focus:outline-none focus-visible:ring-2 focus-visible:ring-red-500 transition-colors'
+              >
+                <svg
+                  className='w-4 h-4'
+                  fill='none'
+                  stroke='currentColor'
+                  viewBox='0 0 24 24'
+                  aria-hidden='true'
+                >
+                  <path
+                    strokeLinecap='round'
+                    strokeLinejoin='round'
+                    strokeWidth={2}
+                    d='M6 18L18 6M6 6l12 12'
+                  />
+                </svg>
+              </button>
+            </div>
+          )}
+        </>
+      )}
 
-      {
-        showWarningModal && (
-          <Modal
-            show={showWarningModal}
-            title="Download required"
-            content={
-              <div className="text-slate-700 dark:text-slate-300">
-                <p className="mb-4">
-                  Transcription runs privately in your browser. Proceeding will save a {getModelSize(props.transcriber.model, props.transcriber.dtype)} model to your browser's temporary storage so it works offline. You can change models anytime in <em>Settings.</em>
+      {showWarningModal && (
+        <Modal
+          show={showWarningModal}
+          title='Download required'
+          content={
+            <div className='text-slate-700 dark:text-slate-300'>
+              <p className='mb-4'>
+                Transcription runs privately in your browser.
+                Proceeding will save a{" "}
+                {getModelSize(
+                  props.transcriber.model,
+                  props.transcriber.dtype,
+                )}{" "}
+                model to your browser's temporary storage so it
+                works offline. You can change models anytime in{" "}
+                <em>Settings.</em>
+              </p>
+              {isMobileOrTablet && (
+                <p className='mb-4 text-sm bg-blue-50 dark:bg-blue-900/30 text-blue-800 dark:text-blue-200 p-3 rounded-md'>
+                  <strong>⚠️ Mobile device detected:</strong>{" "}
+                  A lighter model was selected by default as
+                  it is less likely to crash due to hardware
+                  limits. Transcription may not be as
+                  accurate.
                 </p>
-                {isMobileOrTablet && (
-                  <p className="mb-4 text-sm bg-blue-50 dark:bg-blue-900/30 text-blue-800 dark:text-blue-200 p-3 rounded-md">
-                    <strong>⚠️ Mobile device detected:</strong> A lighter model was selected by default as it is less likely to crash due to hardware limits. Transcription may not be as accurate.
+              )}
+              {typeof navigator !== "undefined" &&
+                (
+                  navigator as unknown as {
+                    connection?: { type?: string };
+                  }
+                ).connection?.type === "cellular" && (
+                  <p className='mt-4 font-semibold text-amber-600 dark:text-amber-500'>
+                    ⚠️ It does not appear you are connected
+                    to Wi-Fi. Downloading the model over
+                    cellular data may incur charges.
                   </p>
                 )}
-                {typeof navigator !== "undefined" && (navigator as unknown as { connection?: { type?: string } }).connection?.type === "cellular" && (
-                  <p className="mt-4 font-semibold text-amber-600 dark:text-amber-500">
-                    ⚠️ It does not appear you are connected to Wi-Fi. Downloading the model over cellular data may incur charges.
-                  </p>
-                )}
-              </div>
+            </div>
+          }
+          onClose={() => setShowWarningModal(false)}
+          submitText='Proceed'
+          submitEnabled={true}
+          onSubmit={() => {
+            localStorage.setItem(
+              "hasAcceptedTranscriptionWarning",
+              "true",
+            );
+            setShowWarningModal(false);
+            startTranscription();
+          }}
+        />
+      )}
+    </>
+  );
+});
+
+export const ApplicationControls = React.memo(
+  function ApplicationControls(props: {
+    transcriber: Transcriber;
+    isDark: boolean;
+    onThemeToggle: () => void;
+    isAutoScrollEnabled: boolean;
+    setIsAutoScrollEnabled: (enabled: boolean) => void;
+  }) {
+    return (
+      <>
+        <nav
+          aria-label='Application controls'
+          className='control-toolbar'
+        >
+          <InfoTile
+            icon={<InfoIcon />}
+            title='About this tool'
+            text='About'
+            isApplicationControl
+            content={
+              <>
+                <h3>Local transcription</h3>
+                <p>
+                  Transcription happens locally in your
+                  browser using OpenAI’s Whisper models or
+                  NVIDIA’s Parakeet model. Parakeet requires a
+                  WebGPU-capable browser. The selected model
+                  is downloaded and cached the first time you
+                  use it. Your files never leave your
+                  computer.
+                </p>
+
+                <h3>AI summarization</h3>
+                <p>
+                  Summaries are generated locally using a
+                  experimental built-in browser AI (Google
+                  Gemini Nano). This feature is currently only
+                  supported in Google Chrome.
+                </p>
+
+                <h3>Acknowledgements</h3>
+                <p>
+                  Maintained by Adam Chaboryk, Digital Media
+                  Projects, Computing and Communications
+                  Services at Toronto Metropolitan University.
+                </p>
+
+                <p>
+                  This tool is a customized fork of{" "}
+                  <a
+                    href='https://huggingface.co/Xenova'
+                    target='_blank'
+                    rel='noopener noreferrer'
+                  >
+                    Joshua Lochner's Whisper Web project.
+                  </a>{" "}
+                  This project also incorporates{" "}
+                  <a
+                    href='https://github.com/narcotic-sh/parakeet.wgsl'
+                    target='_blank'
+                    rel='noopener noreferrer'
+                  >
+                    Hamza Qayyum's parakeet.wgsl project.
+                  </a>
+                </p>
+
+                <h3>Open source</h3>
+                <p>
+                  Email feedback to{" "}
+                  <a href='mailto:adam.chaboryk@torontomu.ca'>
+                    adam.chaboryk@torontomu.ca
+                  </a>{" "}
+                  or view{" "}
+                  <a
+                    href='https://github.com/adamchaboryk/whisper-web'
+                    target='_blank'
+                    rel='noopener noreferrer'
+                  >
+                    source code on GitHub.
+                  </a>
+                </p>
+              </>
             }
-            onClose={() => setShowWarningModal(false)}
-            submitText="Proceed"
-            submitEnabled={true}
-            onSubmit={() => {
-              localStorage.setItem("hasAcceptedTranscriptionWarning", "true");
-              setShowWarningModal(false);
-              startTranscription();
-            }}
           />
-        )
-      }
-    </>
-  );
-});
-
-export const ApplicationControls = React.memo(function ApplicationControls(props: {
-  transcriber: Transcriber;
-  isDark: boolean;
-  onThemeToggle: () => void;
-  isAutoScrollEnabled: boolean;
-  setIsAutoScrollEnabled: (enabled: boolean) => void;
-}) {
-  return (
-    <>
-      <nav
-        aria-label='Application controls'
-        className='control-toolbar'
-      >
-        <InfoTile
-          icon={<InfoIcon />}
-          title='About this tool'
-          text='About'
-          isApplicationControl
-          content=
-          {<>
-            <h3>Local transcription</h3>
-            <p>Transcription happens locally in your browser using OpenAI’s Whisper models or NVIDIA’s Parakeet model. Parakeet requires a WebGPU-capable browser. The selected model is downloaded and cached the first time you use it. Your files never leave your computer.</p>
-
-            <h3>AI summarization</h3>
-            <p>Summaries are generated locally using a experimental built-in browser AI (Google Gemini Nano). This feature is currently only supported in Google Chrome.</p>
-
-            <h3>Acknowledgements</h3>
-            <p>Maintained by Adam Chaboryk, Digital Media Projects, Computing and Communications Services at Toronto Metropolitan University.</p>
-
-            <p>This tool is a customized fork of <a href='https://huggingface.co/Xenova' target='_blank' rel='noopener noreferrer'>Joshua Lochner's Whisper Web project.</a> This project also incorporates <a href="https://github.com/narcotic-sh/parakeet.wgsl" target='_blank' rel='noopener noreferrer'>Hamza Qayyum's parakeet.wgsl project.</a></p>
-
-            <h3>Open source</h3>
-            <p>Email feedback to <a href='mailto:adam.chaboryk@torontomu.ca'>adam.chaboryk@torontomu.ca</a> or view <a href="https://github.com/adamchaboryk/whisper-web" target='_blank' rel='noopener noreferrer'>source code on GitHub.</a></p>
-          </>}
-        />
-        <Tile
-          icon={<ThemeIcon isDark={props.isDark} />}
-          text='Theme'
-          isApplicationControl
-          ariaLabel={props.isDark ? 'Switch to light theme' : 'Switch to dark theme'}
-          title={props.isDark ? 'Switch to light theme' : 'Switch to dark theme'}
-          onClick={props.onThemeToggle}
-        />
-        <SettingsTile transcriber={props.transcriber} icon={<SettingsIcon />} text='Settings' isApplicationControl isAutoScrollEnabled={props.isAutoScrollEnabled} setIsAutoScrollEnabled={props.setIsAutoScrollEnabled} />
-      </nav>
-    </>
-  );
-});
+          <Tile
+            icon={<ThemeIcon isDark={props.isDark} />}
+            text='Theme'
+            isApplicationControl
+            ariaLabel={
+              props.isDark
+                ? "Switch to light theme"
+                : "Switch to dark theme"
+            }
+            title={
+              props.isDark
+                ? "Switch to light theme"
+                : "Switch to dark theme"
+            }
+            onClick={props.onThemeToggle}
+          />
+          <SettingsTile
+            transcriber={props.transcriber}
+            icon={<SettingsIcon />}
+            text='Settings'
+            isApplicationControl
+            isAutoScrollEnabled={props.isAutoScrollEnabled}
+            setIsAutoScrollEnabled={props.setIsAutoScrollEnabled}
+          />
+        </nav>
+      </>
+    );
+  },
+);
 
 function InfoTile(props: {
   icon: JSX.Element;
@@ -808,7 +1044,14 @@ function InfoTile(props: {
 
   return (
     <>
-      <Tile icon={props.icon} text={props.text} ariaLabel={props.title} title={props.title} onClick={onClick} isApplicationControl={props.isApplicationControl} />
+      <Tile
+        icon={props.icon}
+        text={props.text}
+        ariaLabel={props.title}
+        title={props.title}
+        onClick={onClick}
+        isApplicationControl={props.isApplicationControl}
+      />
       <Modal
         show={showModal}
         submitEnabled={false}
@@ -844,7 +1087,14 @@ function SettingsTile(props: {
 
   return (
     <>
-      <Tile icon={props.icon} text={props.text} ariaLabel='Settings' title='Settings' onClick={onClick} isApplicationControl={props.isApplicationControl} />
+      <Tile
+        icon={props.icon}
+        text={props.text}
+        ariaLabel='Settings'
+        title='Settings'
+        onClick={onClick}
+        isApplicationControl={props.isApplicationControl}
+      />
       {showModal && (
         <React.Suspense fallback={null}>
           <SettingsModal
@@ -886,10 +1136,19 @@ function UrlTile(props: {
   };
   return (
     <>
-      <Tile icon={props.icon} text={props.text} onClick={onClick} isUploadButton />
+      <Tile
+        icon={props.icon}
+        text={props.text}
+        onClick={onClick}
+        isUploadButton
+      />
       {showModal && (
         <React.Suspense fallback={null}>
-          <UrlModal show={showModal} onSubmit={onSubmit} onClose={onClose} />
+          <UrlModal
+            show={showModal}
+            onSubmit={onSubmit}
+            onClose={onClose}
+          />
         </React.Suspense>
       )}
     </>
@@ -923,8 +1182,10 @@ function FileTile(props: {
 
     const file = files[0];
 
-    const isAudioVideo = file.type.startsWith("audio/") || file.type.startsWith("video/");
-    const isSubtitle = file.name.endsWith(".srt") || file.name.endsWith(".vtt");
+    const isAudioVideo =
+      file.type.startsWith("audio/") || file.type.startsWith("video/");
+    const isSubtitle =
+      file.name.endsWith(".srt") || file.name.endsWith(".vtt");
 
     if (!isAudioVideo && !isSubtitle) return;
 
@@ -936,7 +1197,8 @@ function FileTile(props: {
 
     // Only create an object URL for audio/video media (subtitles do not play media)
     const urlObj = isAudioVideo ? URL.createObjectURL(file) : "";
-    const mimeType = file.type || (file.name.endsWith(".srt") ? "text/srt" : "text/vtt");
+    const mimeType =
+      file.type || (file.name.endsWith(".srt") ? "text/srt" : "text/vtt");
 
     props.onProcessingChange(true);
 
@@ -944,7 +1206,13 @@ function FileTile(props: {
     reader.addEventListener("load", async (e) => {
       try {
         if (isSubtitle) {
-          props.onFileUpdate(undefined, file, file.name, "", mimeType);
+          props.onFileUpdate(
+            undefined,
+            file,
+            file.name,
+            "",
+            mimeType,
+          );
         } else {
           const arrayBuffer = e.target?.result as ArrayBuffer;
           if (!arrayBuffer) {
@@ -952,8 +1220,20 @@ function FileTile(props: {
             return;
           }
 
+          const { duration } = await probeAudioMetadata(file);
+          if (duration > 0) {
+            validateAudioMetadata(duration, file.size);
+          }
+
           const decoded = await decodeAudioBuffer(arrayBuffer);
-          props.onFileUpdate(decoded, file, file.name, urlObj, mimeType);
+          validateAudioMetadata(decoded.duration, file.size);
+          props.onFileUpdate(
+            decoded,
+            file,
+            file.name,
+            urlObj,
+            mimeType,
+          );
         }
       } catch (error) {
         if (urlObj) URL.revokeObjectURL(urlObj);
@@ -983,11 +1263,11 @@ function FileTile(props: {
     <>
       <input
         ref={fileInputRef}
-        type="file"
-        accept="audio/*,video/*,.srt,.vtt"
-        className="sr-only"
+        type='file'
+        accept='audio/*,video/*,.srt,.vtt'
+        className='sr-only'
         tabIndex={-1}
-        aria-hidden="true"
+        aria-hidden='true'
         onChange={handleFileInput}
       />
       <Tile
@@ -1029,7 +1309,12 @@ function RecordTile(props: {
 
   return (
     <>
-      <Tile icon={props.icon} text={props.text} onClick={onClick} isUploadButton />
+      <Tile
+        icon={props.icon}
+        text={props.text}
+        onClick={onClick}
+        isUploadButton
+      />
       {showModal && (
         <React.Suspense fallback={null}>
           <RecordModal
@@ -1068,15 +1353,23 @@ function Tile(props: {
       onBlur={props.onBlur}
       aria-label={props.ariaLabel ?? props.text}
       aria-describedby={props.ariaDescribedBy}
-      className={props.isApplicationControl
-        ? 'control-button'
-        : props.isUploadButton
-          ? 'upload-button'
-          : 'flex items-center justify-center rounded-lg p-2 bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 hover:text-white hover:bg-blue-600 transition-all duration-200'}
+      className={
+        props.isApplicationControl
+          ? "control-button"
+          : props.isUploadButton
+            ? "upload-button"
+            : "flex items-center justify-center rounded-lg p-2 bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 hover:text-white hover:bg-blue-600 transition-all duration-200"
+      }
     >
       <div className='w-7 h-7 tile-button__icon'>{props.icon}</div>
       {props.text && (
-        <div className={props.isApplicationControl ? 'control-button__label' : 'ml-2 break-text text-center text-md mw-30'}>
+        <div
+          className={
+            props.isApplicationControl
+              ? "control-button__label"
+              : "ml-2 break-text text-center text-md mw-30"
+          }
+        >
           {props.text}
         </div>
       )}

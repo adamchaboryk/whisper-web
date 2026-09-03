@@ -50,8 +50,10 @@ export default function Modal({
         const root = await navigator.storage.getDirectory();
         await root.removeEntry('parakeet-wgsl-audio-decoding', { recursive: true });
       }
-    } catch (e) {
-      console.warn("Failed to delete OPFS cache", e);
+    } catch (e: unknown) {
+      if (!(e instanceof DOMException && e.name === "NotFoundError")) {
+        console.warn("Failed to delete OPFS cache", e);
+      }
     }
 
     try {
