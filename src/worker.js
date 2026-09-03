@@ -43,9 +43,10 @@ const createCanonicalWav = (audio, sampleRate = 16000) => {
   writeString(36, "data");
   view.setUint32(40, dataLength, true);
 
+  const pcm16 = new Int16Array(buffer, 44, audio.length);
   for (let index = 0; index < audio.length; index++) {
     const sample = Math.max(-1, Math.min(1, audio[index]));
-    view.setInt16(44 + index * bytesPerSample, sample < 0 ? sample * 0x8000 : sample * 0x7fff, true);
+    pcm16[index] = sample < 0 ? sample * 0x8000 : sample * 0x7fff;
   }
 
   return new Blob([buffer], { type: "audio/wav" });
@@ -97,21 +98,29 @@ const splitTextIntoPyramidLines = (text) => {
   const words = clean.split(/\s+/).filter(Boolean);
   if (words.length <= 1) return clean;
 
-  if (words.join(" ").length <= MAX_LINE_CHARACTERS) {
+  const totalLength = words.join(" ").length;
+  if (totalLength <= MAX_LINE_CHARACTERS) {
     return clean;
+  }
+
+  const wordLengths = new Array(words.length);
+  for (let i = 0; i < words.length; i++) {
+    wordLengths[i] = words[i].length;
   }
 
   let bestSplitIndex = -1;
   let bestScore = -Infinity;
+  let len1 = 0;
 
   for (let i = 1; i < words.length; i++) {
-    const line1 = words.slice(0, i).join(" ");
-    const line2 = words.slice(i).join(" ");
+    len1 += (i > 1 ? 1 : 0) + wordLengths[i - 1];
+    const len2 = totalLength - len1 - 1;
 
-    const len1 = line1.length;
-    const len2 = line2.length;
-
-    if (len1 > MAX_LINE_CHARACTERS || len2 > MAX_LINE_CHARACTERS) {
+    // Both lines must be within the 42 CPL maximum limit
+    if (len1 > MAX_LINE_CHARACTERS) {
+      break;
+    }
+    if (len2 > MAX_LINE_CHARACTERS) {
       continue;
     }
 
@@ -538,7 +547,7 @@ self.addEventListener("message", async (event) => {
       };
 
       const watchdog = setInterval(() => {
-        if (Date.now() - lastProgressTime > 15000) {
+        if (Date.now() - lastProgressTime > 30000) {
           abortController.abort(new Error("watchdog_timeout"));
         }
       }, 1000);
@@ -588,13 +597,15 @@ self.addEventListener("message", async (event) => {
                 c.timestamp[1] !== null ? c.timestamp[1] + ((offset + sub) / SAMPLE_RATE) : null
               ]
             }));
-            allChunks.push(...shiftedChunks);
+            for (let i = 0; i < shiftedChunks.length; i++) {
+              allChunks.push(shiftedChunks[i]);
+            }
             fullText += (fullText ? " " : "") + subResult.text;
             if (subResult.tps) globalTps = subResult.tps;
           }
 
           if (sub + SUBCHUNK_SAMPLES < audioChunk.length) {
-            await new Promise(resolve => setTimeout(resolve, 2500));
+            await new Promise(resolve => setTimeout(resolve, 50));
           }
         }
       } else if (chunkResult) {
@@ -605,13 +616,15 @@ self.addEventListener("message", async (event) => {
             c.timestamp[1] !== null ? c.timestamp[1] + (offset / SAMPLE_RATE) : null
           ]
         }));
-        allChunks.push(...shiftedChunks);
+        for (let i = 0; i < shiftedChunks.length; i++) {
+          allChunks.push(shiftedChunks[i]);
+        }
         fullText += (fullText ? " " : "") + chunkResult.text;
         if (chunkResult.tps) globalTps = chunkResult.tps;
       }
 
       if (offset + SAMPLES_PER_CHUNK < fullAudio.length) {
-        await new Promise(resolve => setTimeout(resolve, 2500));
+        await new Promise(resolve => setTimeout(resolve, 50));
       }
     }
 

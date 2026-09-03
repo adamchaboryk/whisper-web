@@ -1,10 +1,28 @@
+const SANITIZE_CACHE_MAX_SIZE = 2000;
+const sanitizeCache = new Map<string, string>();
+
 /**
  * Sanitizes an HTML string to only allow safe subtitle formatting tags (b, i, u)
  * and strips all executable scripts, event handlers, and dangerous tags.
  */
 export const sanitizeHTML = (html: string): string => {
+  // Fast path: pure plain text without tags or HTML entities needs no parsing
+  if (!html.includes("<") && !html.includes("&")) {
+    return html;
+  }
+
+  const cached = sanitizeCache.get(html);
+  if (cached !== undefined) {
+    return cached;
+  }
+
   if (typeof DOMParser === "undefined") {
-    return html.replace(/<[^>]+>/g, "");
+    return html
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;")
+      .replace(/'/g, "&#39;");
   }
 
   const doc = new DOMParser().parseFromString(html, "text/html");
@@ -65,6 +83,14 @@ export const sanitizeHTML = (html: string): string => {
     result += walk(child);
   }
 
+  if (sanitizeCache.size >= SANITIZE_CACHE_MAX_SIZE) {
+    const firstKey = sanitizeCache.keys().next().value;
+    if (firstKey !== undefined) {
+      sanitizeCache.delete(firstKey);
+    }
+  }
+  sanitizeCache.set(html, result);
+
   return result;
 };
 
@@ -91,14 +117,20 @@ export function parseSubtitleFile(text: string, type: 'srt' | 'vtt') {
 
     // Check if it has hours
     if (parts.length === 3) {
-      seconds += parseInt(parts[0], 10) * 3600;
-      seconds += parseInt(parts[1], 10) * 60;
-      seconds += parseFloat(parts[2].replace(',', '.'));
+      const h = parseInt(parts[0], 10);
+      const m = parseInt(parts[1], 10);
+      const s = parseFloat(parts[2].replace(',', '.'));
+      if (Number.isFinite(h) && Number.isFinite(m) && Number.isFinite(s)) {
+        seconds = h * 3600 + m * 60 + s;
+      }
     } else if (parts.length === 2) {
-      seconds += parseInt(parts[0], 10) * 60;
-      seconds += parseFloat(parts[1].replace(',', '.'));
+      const m = parseInt(parts[0], 10);
+      const s = parseFloat(parts[1].replace(',', '.'));
+      if (Number.isFinite(m) && Number.isFinite(s)) {
+        seconds = m * 60 + s;
+      }
     }
-    return seconds;
+    return Number.isFinite(seconds) && seconds >= 0 ? seconds : 0;
   };
 
   while (i < lines.length) {
@@ -202,18 +234,25 @@ export function splitTextIntoPyramidLines(text: string): string {
     return clean;
   }
 
+  // Pre-calculate visible length of each word
+  const wordLengths = new Array<number>(words.length);
+  for (let i = 0; i < words.length; i++) {
+    wordLengths[i] = getVisibleLength(words[i]);
+  }
+
   let bestSplitIndex = -1;
   let bestScore = -Infinity;
+  let len1 = 0;
 
   for (let i = 1; i < words.length; i++) {
-    const line1 = words.slice(0, i).join(" ");
-    const line2 = words.slice(i).join(" ");
-
-    const len1 = getVisibleLength(line1);
-    const len2 = getVisibleLength(line2);
+    len1 += (i > 1 ? 1 : 0) + wordLengths[i - 1];
+    const len2 = totalVisible - len1 - 1;
 
     // Both lines must be within the 42 CPL maximum limit
-    if (len1 > MAX_LINE_CHARACTERS || len2 > MAX_LINE_CHARACTERS) {
+    if (len1 > MAX_LINE_CHARACTERS) {
+      break;
+    }
+    if (len2 > MAX_LINE_CHARACTERS) {
       continue;
     }
 

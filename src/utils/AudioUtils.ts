@@ -1,48 +1,32 @@
-const HOURS_IN_SECONDS = 3600;
-const MINUTES_IN_SECONDS = 60;
-
-function padTime(time: number, padding: number = 2) {
-  return String(time).padStart(padding, "0");
+function pad2(n: number): string {
+  return n < 10 ? "0" + n : String(n);
 }
 
-function formatTimestamp(time: number) {
-  const hours = Math.floor(time / HOURS_IN_SECONDS);
-  const hoursRemainder = time - hours * HOURS_IN_SECONDS;
-
-  const minutes = Math.floor(hoursRemainder / MINUTES_IN_SECONDS);
-  const minutesRemainder = hoursRemainder - minutes * MINUTES_IN_SECONDS;
-
-  const seconds = Math.floor(minutesRemainder);
-  const secondsRemainder = minutesRemainder - seconds;
-
-  const milliseconds = Math.floor(secondsRemainder * 1000);
-
-  return { hours, minutes, seconds, milliseconds };
+function pad3(n: number): string {
+  return n < 10 ? "00" + n : n < 100 ? "0" + n : String(n);
 }
 
-export function formatAudioTimestamp(time: number) {
-  const { hours, minutes, seconds } = formatTimestamp(time);
+export function formatAudioTimestamp(time: number): string {
+  const totalSeconds = Math.floor(time);
+  const hours = Math.floor(totalSeconds / 3600);
+  const minutes = Math.floor((totalSeconds % 3600) / 60);
+  const seconds = totalSeconds % 60;
 
-  // Hide hours if not needed
-  const hoursString = hours ? padTime(hours) + ":" : "";
-  const minutesString = padTime(minutes) + ":";
-  const secondsString = padTime(seconds);
-
-  return `${hoursString}${minutesString}${secondsString}`;
+  const hoursPrefix = hours > 0 ? pad2(hours) + ":" : "";
+  return `${hoursPrefix}${pad2(minutes)}:${pad2(seconds)}`;
 }
 
-function formatSrtTimestamp(time: number) {
-  const { hours, minutes, seconds, milliseconds } = formatTimestamp(time);
+export function formatSrtTimestamp(time: number): string {
+  const totalSeconds = Math.floor(time);
+  const hours = Math.floor(totalSeconds / 3600);
+  const minutes = Math.floor((totalSeconds % 3600) / 60);
+  const seconds = totalSeconds % 60;
+  const milliseconds = Math.floor((time - totalSeconds) * 1000);
 
-  const hoursString = padTime(hours) + ":";
-  const minutesString = padTime(minutes) + ":";
-  const secondsString = padTime(seconds) + ",";
-  const millisecondsString = padTime(milliseconds, 3);
-
-  return `${hoursString}${minutesString}${secondsString}${millisecondsString}`;
+  return `${pad2(hours)}:${pad2(minutes)}:${pad2(seconds)},${pad3(milliseconds)}`;
 }
 
-export function formatSrtTimeRange(start: number, end: number) {
+export function formatSrtTimeRange(start: number, end: number): string {
   return `${formatSrtTimestamp(start)} --> ${formatSrtTimestamp(end)}`;
 }
 

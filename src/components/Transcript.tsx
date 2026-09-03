@@ -1,4 +1,4 @@
-import { useRef, useEffect, useLayoutEffect, useState, useMemo } from "react";
+import { useRef, useEffect, useLayoutEffect, useState, useMemo, memo, useCallback } from "react";
 import {
   FloatingArrow,
   FloatingPortal,
@@ -200,66 +200,109 @@ function EditableTimestamp(props: {
   );
 }
 
-function TimestampButton(props: {
+function TimestampButton({
+  timestamp,
+  onClick,
+  onKeyDown,
+  tabIndex,
+  onMount,
+  onHover,
+}: {
   timestamp: number;
   onClick: () => void;
   onKeyDown: (event: React.KeyboardEvent<HTMLButtonElement>) => void;
   tabIndex: number;
-  buttonRef?: (element: HTMLButtonElement | null) => void;
+  onMount?: (element: HTMLButtonElement | null) => void;
+  onHover?: (element: HTMLElement | null) => void;
 }) {
-  const [isTooltipOpen, setIsTooltipOpen] = useState(false);
-  const arrowRef = useRef<SVGSVGElement>(null);
-  const { refs, floatingStyles, context } = useFloating({
-    open: isTooltipOpen,
-    onOpenChange: setIsTooltipOpen,
-    placement: "top",
-    // eslint-disable-next-line react-hooks/refs
-    middleware: [offset(10), flip(), shift({ padding: 8 }), arrow({ element: arrowRef })],
-    whileElementsMounted: autoUpdate,
-  });
-  const hover = useHover(context, { move: false, delay: { open: 800, close: 0, }, });
-  const focus = useFocus(context);
-  const { getReferenceProps, getFloatingProps } = useInteractions([hover, focus]);
-
   return (
-    <>
-      <button
-        ref={(node) => {
-          refs.setReference(node);
-          if (props.buttonRef) {
-            props.buttonRef(node);
-          }
-        }}
-        type='button'
-        className='timestamp-pill mr-5 shrink-0 text-left tabular-nums'
-        onClick={props.onClick}
-        onKeyDown={props.onKeyDown}
-        tabIndex={props.tabIndex}
-        aria-label={`Play from ${formatAudioTimestamp(props.timestamp)}`}
-        {...getReferenceProps()}
-      >
-        {formatAudioTimestamp(props.timestamp)}
-      </button>
-      {isTooltipOpen && (
-        <FloatingPortal>
-          <span
-            ref={refs.setFloating}
-            style={floatingStyles}
-            className='z-20 whitespace-nowrap rounded bg-slate-900 px-2 py-1 text-xs font-medium text-white shadow-lg dark:bg-slate-100 dark:text-slate-900'
-            {...getFloatingProps({ role: "tooltip" })}
-          >
-            <FloatingArrow
-              ref={arrowRef}
-              context={context}
-              className='fill-slate-900 dark:fill-slate-100'
-            />
-            Play from here
-          </span>
-        </FloatingPortal>
-      )}
-    </>
+    <button
+      ref={onMount}
+      type='button'
+      className='timestamp-pill mr-5 shrink-0 text-left tabular-nums'
+      onClick={onClick}
+      onKeyDown={onKeyDown}
+      tabIndex={tabIndex}
+      aria-label={`Play from ${formatAudioTimestamp(timestamp)}`}
+      onMouseEnter={(e) => onHover?.(e.currentTarget)}
+      onMouseLeave={() => onHover?.(null)}
+      onFocus={(e) => onHover?.(e.currentTarget)}
+      onBlur={() => onHover?.(null)}
+    >
+      {formatAudioTimestamp(timestamp)}
+    </button>
   );
 }
+
+interface TranscriptSegmentProps {
+  chunk: { text: string; timestamp: [number, number | null] };
+  index: number;
+  isActive: boolean;
+  isEditing: boolean;
+  tabIndex: number;
+  onChunkUpdate?: (index: number, updatedChunk: { text: string; timestamp: [number, number | null] }) => void;
+  onSeekTo?: (time: number) => void;
+  onKeyDown: (event: React.KeyboardEvent<HTMLButtonElement>, index: number) => void;
+  onButtonMount: (element: HTMLButtonElement | null, index: number) => void;
+  onContainerMount: (element: HTMLDivElement | null, index: number) => void;
+  onTimestampHover?: (element: HTMLElement | null) => void;
+}
+
+const TranscriptSegment = memo(function TranscriptSegment({
+  chunk,
+  index,
+  isActive,
+  isEditing,
+  tabIndex,
+  onChunkUpdate,
+  onSeekTo,
+  onKeyDown,
+  onButtonMount,
+  onContainerMount,
+  onTimestampHover,
+}: TranscriptSegmentProps) {
+  const sanitizedText = useMemo(() => sanitizeHTML(chunk.text).trimStart(), [chunk.text]);
+
+  return (
+    <div
+      ref={(el) => onContainerMount(el, index)}
+      className={`transcript-segment ${isActive ? "active-segment" : ""}`}
+      aria-current={isActive ? "true" : undefined}
+    >
+      {isEditing ? (
+        <>
+          <EditableTimestamp
+            timestamp={chunk.timestamp[0]}
+            label={`Start time ${index + 1}`}
+            onTimestampChange={(newTimestamp) => {
+              onChunkUpdate?.(index, { ...chunk, timestamp: [newTimestamp, chunk.timestamp[1]] });
+            }}
+          />
+          <EditableChunk
+            text={chunk.text.trimStart()}
+            label={`Text ${index + 1}`}
+            onTextChange={(text) => onChunkUpdate?.(index, { ...chunk, text })}
+          />
+        </>
+      ) : (
+        <>
+          <TimestampButton
+            onMount={(element) => onButtonMount(element, index)}
+            timestamp={chunk.timestamp[0]}
+            onClick={() => onSeekTo?.(chunk.timestamp[0])}
+            onKeyDown={(e) => onKeyDown(e, index)}
+            tabIndex={tabIndex}
+            onHover={onTimestampHover}
+          />
+          <div
+            className='flex-1 whitespace-pre-wrap'
+            dangerouslySetInnerHTML={{ __html: sanitizedText }}
+          />
+        </>
+      )}
+    </div>
+  );
+});
 
 function SaveButton(props: { onSave?: () => void; shortcut: string }) {
   const [isTooltipOpen, setIsTooltipOpen] = useState(false);
@@ -393,7 +436,31 @@ const decodeSrtText = (html: string) => {
   return tmp.value;
 };
 
-export default function Transcript({
+function findActiveChunkIndex(
+  chunks: { timestamp: [number, number | null] }[],
+  currentTime: number | undefined,
+): number {
+  if (currentTime === undefined || !chunks.length) return -1;
+  let low = 0;
+  let high = chunks.length - 1;
+  while (low <= high) {
+    const mid = (low + high) >> 1;
+    const start = chunks[mid].timestamp[0];
+    const end =
+      chunks[mid].timestamp[1] ??
+      (chunks[mid + 1]?.timestamp[0] ?? start + 5);
+    if (currentTime < start) {
+      high = mid - 1;
+    } else if (currentTime >= end) {
+      low = mid + 1;
+    } else {
+      return mid;
+    }
+  }
+  return -1;
+}
+
+const Transcript = memo(function Transcript({
   transcribedData,
   chunks: editedChunks,
   onChunkUpdate,
@@ -413,11 +480,53 @@ export default function Transcript({
 }: Props) {
   const divRef = useRef<HTMLDivElement>(null);
   const timestampRefs = useRef<(HTMLButtonElement | null)[]>([]);
+  const transcriptContainerRef = useRef<HTMLDivElement>(null);
+  const chunkRefs = useRef<(HTMLDivElement | null)[]>([]);
+  const activeChunkIndexRef = useRef<number>(-1);
+  const [autoScrollPaused, setAutoScrollPaused] = useState(false);
+  const prevTimeRef = useRef<number | undefined>(undefined);
+
   const chunks = useMemo(
     () => editedChunks ?? transcribedData?.chunks ?? [],
     [editedChunks, transcribedData?.chunks],
   );
+  const activeIndex = useMemo(
+    () => findActiveChunkIndex(chunks, currentTime),
+    [chunks, currentTime],
+  );
   const saveShortcut = /Mac|iPhone|iPad|iPod/.test(navigator.userAgent) ? "Command + S" : "Ctrl + S";
+
+  const [tooltipTarget, setTooltipTarget] = useState<HTMLElement | null>(null);
+  const arrowRef = useRef<SVGSVGElement>(null);
+  const { refs, floatingStyles, context } = useFloating({
+    open: Boolean(tooltipTarget),
+    elements: { reference: tooltipTarget },
+    placement: "top",
+    // eslint-disable-next-line react-hooks/refs
+    middleware: [offset(10), flip(), shift({ padding: 8 }), arrow({ element: arrowRef })],
+    whileElementsMounted: autoUpdate,
+  });
+
+  const handleKeyDown = useCallback((event: React.KeyboardEvent<HTMLButtonElement>, index: number) => {
+    const offset = event.key === "ArrowDown" ? 1 : event.key === "ArrowUp" ? -1 : 0;
+    if (offset) {
+      event.preventDefault();
+      timestampRefs.current[index + offset]?.focus();
+    }
+  }, []);
+
+  const handleButtonRef = useCallback((element: HTMLButtonElement | null, index: number) => {
+    timestampRefs.current[index] = element;
+  }, []);
+
+  const handleContainerRef = useCallback((element: HTMLDivElement | null, index: number) => {
+    chunkRefs.current[index] = element;
+  }, []);
+
+  const handleSeek = useCallback((time: number) => {
+    setAutoScrollPaused(false);
+    onSeekTo?.(time);
+  }, [onSeekTo]);
 
   const saveBlob = (blob: Blob, filename: string) => {
     const url = URL.createObjectURL(blob);
@@ -471,7 +580,7 @@ export default function Transcript({
     if (copiedState === "idle") return;
     const timer = window.setTimeout(() => {
       setCopiedState("idle");
-    }, 6000);
+    }, 5000);
     return () => window.clearTimeout(timer);
   }, [copiedState]);
 
@@ -505,12 +614,6 @@ export default function Transcript({
           : copiedState === "failed"
             ? "Failed to copy"
             : "Copy to Clipboard",
-      ariaLabel:
-        copiedState === "copied"
-          ? "Transcript copied to clipboard"
-          : copiedState === "failed"
-            ? "Failed to copy transcript to clipboard"
-            : "Copy transcript to clipboard",
       onClick: copyToClipboard,
       icon:
         copiedState === "copied" ? (
@@ -592,12 +695,6 @@ export default function Transcript({
     }
   }, [transcribedData?.transcriptionSeconds]);
 
-  const transcriptContainerRef = useRef<HTMLDivElement>(null);
-  const chunkRefs = useRef<(HTMLDivElement | null)[]>([]);
-  const activeChunkIndexRef = useRef<number>(-1);
-  const [autoScrollPaused, setAutoScrollPaused] = useState(false);
-  const prevTimeRef = useRef<number | undefined>(undefined);
-
   useEffect(() => {
     // Detect audio seek (time jumped by more than 1.5 seconds)
     if (currentTime !== undefined && prevTimeRef.current !== undefined) {
@@ -607,11 +704,7 @@ export default function Transcript({
     }
     prevTimeRef.current = currentTime;
 
-    if (!chunks) return;
-
-    const activeIndex = chunks.findIndex((chunk, i) => {
-      return currentTime !== undefined && currentTime >= chunk.timestamp[0] && currentTime < (chunk.timestamp[1] ?? (chunks[i + 1]?.timestamp[0] ?? chunk.timestamp[0] + 5));
-    });
+    if (!chunks.length) return;
 
     if (activeIndex !== -1 && activeIndex !== activeChunkIndexRef.current) {
       activeChunkIndexRef.current = activeIndex;
@@ -621,14 +714,16 @@ export default function Transcript({
         const chunkElement = chunkRefs.current[activeIndex];
 
         if (chunkElement) {
-          const containerCenter = container.clientHeight / 2;
-          const chunkCenter = chunkElement.clientHeight / 2;
-          const scrollTop = chunkElement.offsetTop - containerCenter + chunkCenter;
-          container.scrollTo({ top: scrollTop, behavior: 'smooth' });
+          requestAnimationFrame(() => {
+            const containerCenter = container.clientHeight / 2;
+            const chunkCenter = chunkElement.clientHeight / 2;
+            const scrollTop = chunkElement.offsetTop - containerCenter + chunkCenter;
+            container.scrollTo({ top: scrollTop, behavior: 'smooth' });
+          });
         }
       }
     }
-  }, [currentTime, chunks, isAutoScrollSettingEnabled, autoScrollPaused, isEditing]);
+  }, [currentTime, chunks.length, activeIndex, isAutoScrollSettingEnabled, autoScrollPaused, isEditing]);
 
   useEffect(() => {
     if (!autoScrollPaused && isAutoScrollSettingEnabled && !isEditing && activeChunkIndexRef.current !== -1) {
@@ -636,10 +731,12 @@ export default function Transcript({
       const chunkElement = chunkRefs.current[activeChunkIndexRef.current];
 
       if (container && chunkElement) {
-        const containerCenter = container.clientHeight / 2;
-        const chunkCenter = chunkElement.clientHeight / 2;
-        const scrollTop = chunkElement.offsetTop - containerCenter + chunkCenter;
-        container.scrollTo({ top: scrollTop, behavior: 'smooth' });
+        requestAnimationFrame(() => {
+          const containerCenter = container.clientHeight / 2;
+          const chunkCenter = chunkElement.clientHeight / 2;
+          const scrollTop = chunkElement.offsetTop - containerCenter + chunkCenter;
+          container.scrollTo({ top: scrollTop, behavior: 'smooth' });
+        });
       }
     }
   }, [autoScrollPaused, isAutoScrollSettingEnabled, isEditing]);
@@ -726,57 +823,22 @@ export default function Transcript({
                 }
               }}
             >
-              {chunks.map((chunk, i) => {
-                const isActive = currentTime !== undefined && currentTime >= chunk.timestamp[0] && currentTime < (chunk.timestamp[1] ?? (chunks[i + 1]?.timestamp[0] ?? chunk.timestamp[0] + 5));
-                return (
-                  <div
-                    key={`segment-${i}`}
-                    ref={(el) => { chunkRefs.current[i] = el; }}
-                    className={`transcript-segment ${isActive ? "active-segment" : ""}`}
-                    aria-current={isActive ? "true" : undefined}
-                  >
-                    {isEditing ? (
-                      <>
-                        <EditableTimestamp
-                          timestamp={chunk.timestamp[0]}
-                          label={`Start time ${i + 1}`}
-                          onTimestampChange={(newTimestamp) => {
-                            onChunkUpdate?.(i, { ...chunk, timestamp: [newTimestamp, chunk.timestamp[1]] });
-                          }}
-                        />
-                        <EditableChunk
-                          text={chunk.text.trimStart()}
-                          label={`Text ${i + 1}`}
-                          onTextChange={(text) => onChunkUpdate?.(i, { ...chunk, text })}
-                        />
-                      </>
-                    ) : (
-                      <>
-                        <TimestampButton
-                          buttonRef={(element) => { timestampRefs.current[i] = element; }}
-                          timestamp={chunk.timestamp[0]}
-                          onClick={() => {
-                            setAutoScrollPaused(false);
-                            onSeekTo?.(chunk.timestamp[0]);
-                          }}
-                          onKeyDown={(event) => {
-                            const offset = event.key === "ArrowDown" ? 1 : event.key === "ArrowUp" ? -1 : 0;
-                            if (offset) {
-                              event.preventDefault();
-                              timestampRefs.current[i + offset]?.focus();
-                            }
-                          }}
-                          tabIndex={i > 0 ? -1 : 0}
-                        />
-                        <div
-                          className='flex-1 whitespace-pre-wrap'
-                          dangerouslySetInnerHTML={{ __html: sanitizeHTML(chunk.text).trimStart() }}
-                        />
-                      </>
-                    )}
-                  </div>
-                );
-              })}
+              {chunks.map((chunk, i) => (
+                <TranscriptSegment
+                  key={`segment-${i}`}
+                  chunk={chunk}
+                  index={i}
+                  isActive={i === activeIndex}
+                  isEditing={Boolean(isEditing)}
+                  tabIndex={i > 0 ? -1 : 0}
+                  onChunkUpdate={onChunkUpdate}
+                  onSeekTo={handleSeek}
+                  onKeyDown={handleKeyDown}
+                  onButtonMount={handleButtonRef}
+                  onContainerMount={handleContainerRef}
+                  onTimestampHover={setTooltipTarget}
+                />
+              ))}
             </div>
             {/* fade cue hinting the panel is scrollable */}
             <div
@@ -784,6 +846,24 @@ export default function Transcript({
               className='pointer-events-none absolute inset-x-0 bottom-0 h-20 bg-gradient-to-t from-black/10 via-black/5 to-transparent dark:from-black/30 dark:via-black/15'
             />
           </div>
+
+          {tooltipTarget && (
+            <FloatingPortal>
+              <span
+                ref={refs.setFloating}
+                style={floatingStyles}
+                className='z-20 whitespace-nowrap rounded bg-slate-900 px-2 py-1 text-xs font-medium text-white shadow-lg dark:bg-slate-100 dark:text-slate-900 pointer-events-none'
+                role='tooltip'
+              >
+                <FloatingArrow
+                  ref={arrowRef}
+                  context={context}
+                  className='fill-slate-900 dark:fill-slate-100'
+                />
+                Play from here
+              </span>
+            </FloatingPortal>
+          )}
 
           <div className='w-full flex justify-end mb-5 pr-2'>
             <label className='flex items-center gap-1.5 text-sm font-medium text-slate-500 dark:text-slate-400 cursor-pointer' htmlFor="auto-scroll">
@@ -811,7 +891,6 @@ export default function Transcript({
                 key={i}
                 onClick={button.onClick}
                 className='export-button gap-1.5'
-                aria-label={button.ariaLabel}
               >
                 {button.icon}
                 {button.name}
@@ -880,4 +959,6 @@ export default function Transcript({
       <div ref={endOfMessagesRef} />
     </div>
   );
-}
+});
+
+export default Transcript;

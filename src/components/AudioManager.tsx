@@ -6,28 +6,29 @@ import React, {
   useMemo,
   useRef,
 } from "react";
-import axios from "axios";
-import { checkSupport } from "parakeet.wgsl";
+import { parseSubtitleFile } from "../utils/SubtitleUtils";
 import Modal from "./modal/Modal";
-import { UrlInput } from "./modal/UrlInput";
 import AudioPlayer from "./AudioPlayer";
 import { TranscribeButton } from "./TranscribeButton";
 import Constants, {
   AudioSource,
-  DTYPES,
-  LANGUAGES,
-  MODELS,
-  isIOS,
   isMobileOrTablet,
 } from "../utils/Constants";
 import { Transcriber, TranscriberData } from "../hooks/useTranscriber";
-import AudioRecorder from "./AudioRecorder";
 import { AnchorIcon, FolderIcon, MicrophoneIcon, InfoIcon, ThemeIcon, SettingsIcon } from '../utils/Icons';
+
+const SettingsModal = React.lazy(() => import("./SettingsModal"));
+const RecordModal = React.lazy(() => import("./RecordModal"));
+const UrlModal = React.lazy(() => import("./UrlModal"));
 const INVALID_AUDIO_LINK = "INVALID_AUDIO_LINK";
 const INVALID_URL_SCHEME = "INVALID_URL_SCHEME";
 const INVALID_URL_FORMAT = "INVALID_URL_FORMAT";
+const INVALID_PRIVATE_URL = "INVALID_PRIVATE_URL";
 const FILE_TOO_LARGE = "FILE_TOO_LARGE";
 const MAX_AUDIO_DOWNLOAD_BYTES = 500 * 1024 * 1024; // 500 MB
+
+const PRIVATE_HOST_REGEX =
+  /^(localhost|127\.\d+\.\d+\.\d+|10\.\d+\.\d+\.\d+|172\.(1[6-9]|2\d|3[01])\.\d+\.\d+|192\.168\.\d+\.\d+|169\.254\.\d+\.\d+|0\.0\.0\.0|::1|\[::1\])$/i;
 
 // Sites known to serve web pages (not direct audio files) at their URLs, which would
 // otherwise surface as a confusing CORS/network error instead of an explanation.
@@ -44,14 +45,6 @@ const NON_AUDIO_HOSTNAMES = [
   "spotify.com",
 ];
 
-function isValidHttpUrl(rawUrl: string): boolean {
-  try {
-    const parsed = new URL(rawUrl.trim());
-    return parsed.protocol === "http:" || parsed.protocol === "https:";
-  } catch {
-    return false;
-  }
-}
 
 function validateAudioUrl(rawUrl: string): URL {
   const trimmed = rawUrl.trim();
@@ -71,6 +64,14 @@ function validateAudioUrl(rawUrl: string): URL {
     throw new Error(INVALID_URL_SCHEME);
   }
 
+  // Allow same-origin resources (e.g. sample audio and sample video)
+  if (parsedUrl.origin !== window.location.origin) {
+    const hostname = parsedUrl.hostname.toLowerCase();
+    if (PRIVATE_HOST_REGEX.test(hostname) || hostname.endsWith(".local") || hostname.endsWith(".internal")) {
+      throw new Error(INVALID_PRIVATE_URL);
+    }
+  }
+
   return parsedUrl;
 }
 
@@ -83,6 +84,9 @@ function isKnownNonAudioLink(parsedUrl: URL): boolean {
 
 function getAudioUrlErrorMessage(error: unknown): string {
   if (error instanceof Error) {
+    if (error.name === "AbortError") {
+      return "";
+    }
     if (error.message === FILE_TOO_LARGE) {
       return "The audio file exceeds the maximum allowed download size (500 MB). Please use a smaller file or extract the audio track first.";
     }
@@ -95,41 +99,39 @@ function getAudioUrlErrorMessage(error: unknown): string {
     if (error.message === INVALID_URL_FORMAT) {
       return "Please enter a valid, complete URL including http:// or https:// (e.g., https://example.com/audio.mp3).";
     }
+    if (error.message === INVALID_PRIVATE_URL) {
+      return "Local and private network URLs (such as localhost or internal IP addresses) cannot be accessed.";
+    }
+    if (error.message === "HTTP_404") {
+      return "No file could be found at that URL. Please double-check the link and try again.";
+    }
+    if (error.message.startsWith("HTTP_")) {
+      const status = error.message.replace("HTTP_", "");
+      return `Failed to download the audio (server responded with status ${status}).`;
+    }
+    if (error.name === "TypeError") {
+      return "Could not reach that URL. It may be blocked by the site (CORS) or the link may be incorrect.";
+    }
   }
 
   if (error instanceof DOMException) {
     return "The file at that URL couldn't be decoded as audio. Please check the link points directly to a valid audio file.";
   }
 
-  if (axios.isAxiosError(error)) {
-    if (error.response) {
-      return error.response.status === 404
-        ? "No file could be found at that URL. Please double-check the link and try again."
-        : `Failed to download the audio (server responded with status ${error.response.status}).`;
-    }
-    return "Could not reach that URL. It may be blocked by the site (CORS) or the link may be incorrect.";
-  }
-
   return "Something went wrong while loading the audio. Please check the URL and try again.";
 }
 
-function titleCase(str: string) {
-  str = str.toLowerCase();
-  return (str.match(/\w+.?/g) || [])
-    .map((word) => {
-      return word.charAt(0).toUpperCase() + word.slice(1);
-    })
-    .join("");
-}
 
 async function decodeAudioBuffer(arrayBuffer: ArrayBuffer): Promise<AudioBuffer> {
-  const audioCTX = new AudioContext({
-    sampleRate: Constants.SAMPLING_RATE,
-  });
+  const audioCTX = typeof OfflineAudioContext !== "undefined"
+    ? new OfflineAudioContext(1, 1, Constants.SAMPLING_RATE)
+    : new AudioContext({ sampleRate: Constants.SAMPLING_RATE });
   try {
     return await audioCTX.decodeAudioData(arrayBuffer);
   } finally {
-    void audioCTX.close().catch(() => undefined);
+    if ("close" in audioCTX && typeof audioCTX.close === "function") {
+      void audioCTX.close().catch(() => undefined);
+    }
   }
 }
 
@@ -152,7 +154,7 @@ function getModelSize(model: string, dtype: string): string {
   return baseMB + " MB";
 }
 
-export function AudioManager(props: {
+export const AudioManager = React.memo(function AudioManager(props: {
   transcriber: Transcriber;
   onGenerateSummary?: () => void;
   transcriptChunks?: TranscriberData["chunks"];
@@ -292,7 +294,7 @@ export function AudioManager(props: {
       const blob = new Blob([data], { type: mimeType });
       const blobUrl = URL.createObjectURL(blob);
       try {
-        const decoded = await decodeAudioBuffer(data.slice(0));
+        const decoded = await decodeAudioBuffer(data);
         checkAndResetIfMismatched(decoded.duration);
         setAudioData({
           buffer: decoded,
@@ -355,32 +357,72 @@ export function AudioManager(props: {
           throw new Error(INVALID_AUDIO_LINK);
         }
 
-        const { data, headers } = (await axios.get(parsedUrl.href, {
+        const response = await fetch(parsedUrl.href, {
           signal: requestAbortController.signal,
-          responseType: "arraybuffer",
-          onDownloadProgress: (progressEvent) => {
-            if (progressEvent.loaded > MAX_AUDIO_DOWNLOAD_BYTES) {
-              isSizeExceeded = true;
-              requestAbortController.abort();
-            }
-          },
-        })) as {
-          data: ArrayBuffer;
-          headers: { "content-type": string; "content-length"?: string };
-        };
+        });
 
-        const contentLength = Number(headers["content-length"]);
-        if (contentLength && contentLength > MAX_AUDIO_DOWNLOAD_BYTES) {
-          throw new Error(FILE_TOO_LARGE);
+        if (!response.ok) {
+          throw new Error(`HTTP_${response.status}`);
         }
-        if (data.byteLength > MAX_AUDIO_DOWNLOAD_BYTES) {
+
+        const contentLengthHeader = response.headers.get("content-length");
+        const contentLength = contentLengthHeader ? Number(contentLengthHeader) : 0;
+        if (contentLength > MAX_AUDIO_DOWNLOAD_BYTES) {
           throw new Error(FILE_TOO_LARGE);
         }
 
-        let mimeType = headers["content-type"];
-        if (mimeType && mimeType.startsWith("text/html")) {
+        let mimeType = response.headers.get("content-type") || "";
+        if (mimeType.startsWith("text/html")) {
           throw new Error(INVALID_AUDIO_LINK);
         }
+
+        const reader = response.body?.getReader();
+        if (!reader) {
+          const buffer = await response.arrayBuffer();
+          if (buffer.byteLength > MAX_AUDIO_DOWNLOAD_BYTES) {
+            throw new Error(FILE_TOO_LARGE);
+          }
+          if (!mimeType || mimeType === "audio/wave") {
+            const pathname = parsedUrl.pathname.toLowerCase();
+            if (pathname.endsWith(".webm")) {
+              mimeType = "video/webm";
+            } else if (pathname.endsWith(".mp4")) {
+              mimeType = "video/mp4";
+            } else {
+              mimeType = "audio/wav";
+            }
+          }
+          const isSampleVideo =
+            parsedUrl.href === sampleVideoUrl ||
+            parsedUrl.pathname.includes("sample-video.mp4") ||
+            parsedUrl.pathname.includes("video-demo.webm");
+          await setAudioFromDownload(buffer, mimeType, isSampleVideo);
+          return;
+        }
+
+        const chunks: Uint8Array[] = [];
+        let receivedBytes = 0;
+
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          receivedBytes += value.byteLength;
+          if (receivedBytes > MAX_AUDIO_DOWNLOAD_BYTES) {
+            isSizeExceeded = true;
+            requestAbortController.abort();
+            throw new Error(FILE_TOO_LARGE);
+          }
+          chunks.push(value);
+        }
+
+        const combined = new Uint8Array(receivedBytes);
+        let offset = 0;
+        for (const chunk of chunks) {
+          combined.set(chunk, offset);
+          offset += chunk.byteLength;
+        }
+        const data = combined.buffer;
+
         if (!mimeType || mimeType === "audio/wave") {
           const pathname = parsedUrl.pathname.toLowerCase();
           if (pathname.endsWith(".webm")) {
@@ -402,7 +444,7 @@ export function AudioManager(props: {
           return;
         }
 
-        if (axios.isCancel(error)) {
+        if (error instanceof Error && error.name === "AbortError") {
           return;
         }
 
@@ -482,9 +524,11 @@ export function AudioManager(props: {
               onFileError={(error) => {
                 console.error("Failed to load file:", error);
                 setAudioError(
-                  error instanceof DOMException && error.name === "QuotaExceededError"
-                    ? "The file is too large for the browser's available memory. Try extracting the audio track (e.g. to MP3 or WAV) first."
-                    : "The file could not be decoded as audio. Please check that it is a supported audio or video format."
+                  error instanceof Error && error.message === FILE_TOO_LARGE
+                    ? "The file exceeds the maximum allowed size (500 MB). Please use a smaller file or extract the audio track first."
+                    : error instanceof DOMException && error.name === "QuotaExceededError"
+                      ? "The file is too large for the browser's available memory. Try extracting the audio track (e.g. to MP3 or WAV) first."
+                      : "The file could not be decoded as audio. Please check that it is a supported audio or video format."
                 );
               }}
               onFileUpdate={async (decoded, blob, sourceName, blobUrl, mimeType) => {
@@ -492,7 +536,6 @@ export function AudioManager(props: {
 
                 if (!decoded && (mimeType === 'text/srt' || mimeType === 'text/vtt' || sourceName.endsWith('.srt') || sourceName.endsWith('.vtt'))) {
                   const text = await blob.text();
-                  const { parseSubtitleFile } = await import('../utils/SubtitleUtils');
                   const type = sourceName.endsWith('.vtt') ? 'vtt' : 'srt';
                   const parsed = parseSubtitleFile(text, type);
 
@@ -695,9 +738,9 @@ export function AudioManager(props: {
       }
     </>
   );
-}
+});
 
-export function ApplicationControls(props: {
+export const ApplicationControls = React.memo(function ApplicationControls(props: {
   transcriber: Transcriber;
   isDark: boolean;
   onThemeToggle: () => void;
@@ -744,7 +787,7 @@ export function ApplicationControls(props: {
       </nav>
     </>
   );
-}
+});
 
 function InfoTile(props: {
   icon: JSX.Element;
@@ -802,244 +845,19 @@ function SettingsTile(props: {
   return (
     <>
       <Tile icon={props.icon} text={props.text} ariaLabel='Settings' title='Settings' onClick={onClick} isApplicationControl={props.isApplicationControl} />
-      <SettingsModal
-        show={showModal}
-        onSubmit={onSubmit}
-        onClose={onClose}
-        transcriber={props.transcriber}
-        isAutoScrollEnabled={props.isAutoScrollEnabled}
-        setIsAutoScrollEnabled={props.setIsAutoScrollEnabled}
-      />
+      {showModal && (
+        <React.Suspense fallback={null}>
+          <SettingsModal
+            show={showModal}
+            onSubmit={onSubmit}
+            onClose={onClose}
+            transcriber={props.transcriber}
+            isAutoScrollEnabled={props.isAutoScrollEnabled}
+            setIsAutoScrollEnabled={props.setIsAutoScrollEnabled}
+          />
+        </React.Suspense>
+      )}
     </>
-  );
-}
-
-function SettingsModal(props: {
-  show: boolean;
-  onSubmit: (url: string) => void;
-  onClose: () => void;
-  transcriber: Transcriber;
-  isAutoScrollEnabled: boolean;
-  setIsAutoScrollEnabled: (enabled: boolean) => void;
-}) {
-  const names = Object.values(LANGUAGES).map(titleCase);
-  const isParakeet = props.transcriber.model === "parakeet.wgsl";
-
-  const isMultilingual = useMemo(() => {
-    const model = props.transcriber.model;
-    return (
-      !model.endsWith(".en") && MODELS[model] && MODELS[model][1] === ""
-    );
-  }, [props.transcriber.model]);
-
-  const HAS_WEBGPU_API = "gpu" in navigator && !!(navigator as Navigator & { gpu?: unknown }).gpu;
-  const [IS_WEBGPU_AVAILABLE, setIsWebgpuAvailable] = useState(false);
-  // Tracks whether the async WebGPU support check has finished, so we don't
-  // prematurely reset settings based on the initial "unavailable" default.
-  const [hasCheckedWebgpu, setHasCheckedWebgpu] = useState(false);
-  const availableModels = Object.entries(MODELS).filter(
-    ([modelKey]) => modelKey !== "parakeet.wgsl" || IS_WEBGPU_AVAILABLE,
-  );
-
-  useEffect(() => {
-    if (!HAS_WEBGPU_API) {
-      setTimeout(() => {
-        setIsWebgpuAvailable(false);
-        setHasCheckedWebgpu(true);
-      }, 0);
-      return;
-    }
-
-    let cancelled = false;
-    checkSupport()
-      .then((result) => {
-        if (!cancelled) {
-          setIsWebgpuAvailable(result.supported);
-        }
-      })
-      .catch(() => {
-        if (!cancelled) {
-          setIsWebgpuAvailable(false);
-        }
-      })
-      .finally(() => {
-        if (!cancelled) {
-          setHasCheckedWebgpu(true);
-        }
-      });
-
-    return () => {
-      cancelled = true;
-    };
-  }, [HAS_WEBGPU_API]);
-
-  useEffect(() => {
-    if (hasCheckedWebgpu && (!IS_WEBGPU_AVAILABLE || isIOS) && props.transcriber.gpu) {
-      props.transcriber.setGPU(false);
-    }
-  }, [hasCheckedWebgpu, IS_WEBGPU_AVAILABLE, props.transcriber]);
-
-  useEffect(() => {
-    if (hasCheckedWebgpu && !IS_WEBGPU_AVAILABLE && props.transcriber.model === "parakeet.wgsl") {
-      props.transcriber.setModel("onnx-community/whisper-base");
-    }
-  }, [hasCheckedWebgpu, IS_WEBGPU_AVAILABLE, props.transcriber]);
-
-  useEffect(() => {
-    if (hasCheckedWebgpu && (!IS_WEBGPU_AVAILABLE || isIOS) && props.transcriber.dtype === "fp16") {
-      props.transcriber.setDtype(Constants.DEFAULT_DTYPE);
-    }
-  }, [hasCheckedWebgpu, IS_WEBGPU_AVAILABLE, props.transcriber]);
-
-  const [cacheSize, setCacheSize] = useState<number>(0);
-
-  useEffect(() => {
-    if (!props.show) return;
-
-    async function fetchCacheSize() {
-      if ("storage" in navigator && "estimate" in navigator.storage) {
-        const estimate = await navigator.storage.estimate();
-        const usage = Number(estimate.usage);
-        setCacheSize(~~(usage / 1000000));
-      } else {
-        setCacheSize(-1);
-      }
-    }
-
-    fetchCacheSize();
-  }, [props.show]);
-
-  // Get the language code of the selected model
-  const getModelLanguage = () => {
-    if (props.transcriber.model in MODELS) {
-      const [, lang] = MODELS[props.transcriber.model];
-      return lang || props.transcriber.language;
-    }
-    return props.transcriber.language;
-  };
-
-  return (
-    <Modal
-      show={props.show}
-      title='Settings'
-      content={
-        <>
-          <label htmlFor='model-select' className='form-label'>Model</label>
-          <span className='text-gray-600 dark:text-slate-400 block'>Some models are bigger than others, so your browser may cache up to about 1.5 GB.</span>
-          <select
-            id='model-select'
-            className='form-select mt-1 mb-3'
-            value={props.transcriber.model}
-            onChange={(e) => {
-              props.transcriber.setModel(e.target.value);
-            }}
-          >
-            <optgroup label='Multilingual'>
-              {availableModels
-                .filter(([, [, language]]) => language === "")
-                .map(([modelKey, [displayName]]) => (
-                  <option key={modelKey} value={modelKey}>
-                    {displayName}
-                  </option>
-                ))}
-            </optgroup>
-            <optgroup label='English Only'>
-              {availableModels
-                .filter(([, [, language]]) => language === "en")
-                .map(([modelKey, [displayName]]) => (
-                  <option key={modelKey} value={modelKey}>
-                    {displayName}
-                  </option>
-                ))}
-            </optgroup>
-          </select>
-
-          {!isParakeet && (
-            <>
-              <label htmlFor='dtype-select' className='form-label'>
-                Performance mode
-              </label>
-              <span className='mb-2 text-gray-600 dark:text-slate-400 block'>Choose a faster or more accurate setting depending on your device.</span>
-              <select
-                id='dtype-select'
-                className='form-select mt-1 mb-1'
-                defaultValue={props.transcriber.dtype}
-                onChange={(e) => {
-                  props.transcriber.setDtype(e.target.value);
-                }}
-              >
-                {Object.entries(DTYPES)
-                  .filter(([value]) => value !== "fp16" || (IS_WEBGPU_AVAILABLE && !isIOS))
-                  .map(([value, label]) => (
-                    <option key={value} value={value}>
-                      {label}
-                    </option>
-                  ))}
-              </select>
-              {IS_WEBGPU_AVAILABLE && !isIOS && (
-                <div className='flex justify-between items-center mb-3 px-1'>
-                  <div className='flex'>
-                    <input
-                      id='gpu'
-                      type='checkbox'
-                      checked={props.transcriber.gpu}
-                      onChange={(e) => {
-                        props.transcriber.setGPU(e.target.checked);
-                      }}
-                    ></input>
-                    <label htmlFor='gpu' className='form-label form-label--checkbox'>
-                      Enable GPU acceleration
-                    </label>
-                  </div>
-                </div>
-              )}
-
-              <label htmlFor='selectLang' className='form-label'>Source language</label>
-              <select
-                id='selectLang'
-                className='form-select mt-1 mb-3'
-                value={
-                  isMultilingual
-                    ? props.transcriber.language
-                    : getModelLanguage()
-                }
-                onChange={(e) => {
-                  props.transcriber.setLanguage(e.target.value);
-                }}
-                disabled={!isMultilingual}
-              >
-                {Object.keys(LANGUAGES).map((key, i) => (
-                  <option key={key} value={key}>
-                    {names[i]}
-                  </option>
-                ))}
-              </select>
-
-              <label htmlFor='selectTask' className='form-label'>Task</label>
-              <select
-                id='selectTask'
-                className='form-select mt-1 mb-3'
-                value={
-                  isMultilingual
-                    ? props.transcriber.subtask
-                    : "transcribe"
-                }
-                onChange={(e) => {
-                  props.transcriber.setSubtask(e.target.value);
-                }}
-                disabled={!isMultilingual}
-              >
-                <option value={"transcribe"}>Transcribe</option>
-                <option value={"translate"}>Translate</option>
-              </select>
-            </>
-          )}
-        </>
-      }
-      onClose={props.onClose}
-      onSubmit={() => { }}
-      cacheSize={cacheSize}
-    />
   );
 }
 
@@ -1069,50 +887,12 @@ function UrlTile(props: {
   return (
     <>
       <Tile icon={props.icon} text={props.text} onClick={onClick} isUploadButton />
-      <UrlModal show={showModal} onSubmit={onSubmit} onClose={onClose} />
+      {showModal && (
+        <React.Suspense fallback={null}>
+          <UrlModal show={showModal} onSubmit={onSubmit} onClose={onClose} />
+        </React.Suspense>
+      )}
     </>
-  );
-}
-
-function UrlModal(props: {
-  show: boolean;
-  onSubmit: (url: string) => void;
-  onClose: () => void;
-}) {
-  const [url, setUrl] = useState("");
-
-  const onChange = (event: React.ChangeEvent<HTMLInputElement>) => {
-    setUrl(event.target.value);
-  };
-
-  const trimmed = url.trim();
-  const isValid = isValidHttpUrl(trimmed);
-
-  const onSubmit = () => {
-    if (isValid) {
-      props.onSubmit(trimmed);
-    }
-  };
-
-  return (
-    <Modal
-      show={props.show}
-      title='From URL'
-      content={
-        <>
-          <UrlInput onChange={onChange} value={url} placeholder='https://example.com/audio.mp3' />
-          {trimmed.length > 0 && !isValid && (
-            <p className='mt-2 text-xs text-amber-600 dark:text-amber-400'>
-              Please enter a valid URL starting with http:// or https://
-            </p>
-          )}
-        </>
-      }
-      onClose={props.onClose}
-      submitText='Submit'
-      submitEnabled={isValid}
-      onSubmit={onSubmit}
-    />
   );
 }
 
@@ -1147,6 +927,12 @@ function FileTile(props: {
     const isSubtitle = file.name.endsWith(".srt") || file.name.endsWith(".vtt");
 
     if (!isAudioVideo && !isSubtitle) return;
+
+    if (file.size > MAX_AUDIO_DOWNLOAD_BYTES) {
+      props.onFileError?.(new Error(FILE_TOO_LARGE));
+      event.target.value = "";
+      return;
+    }
 
     // Only create an object URL for audio/video media (subtitles do not play media)
     const urlObj = isAudioVideo ? URL.createObjectURL(file) : "";
@@ -1244,58 +1030,17 @@ function RecordTile(props: {
   return (
     <>
       <Tile icon={props.icon} text={props.text} onClick={onClick} isUploadButton />
-      <RecordModal
-        show={showModal}
-        onSubmit={onSubmit}
-        onProgress={() => { }}
-        onClose={onClose}
-      />
-    </>
-  );
-}
-
-function RecordModal(props: {
-  show: boolean;
-  onProgress: (data: Blob | undefined) => void;
-  onSubmit: (data: Blob | undefined) => void;
-  onClose: () => void;
-}) {
-  const [audioBlob, setAudioBlob] = useState<Blob>();
-
-  const onRecordingComplete = (blob: Blob) => {
-    setAudioBlob(blob);
-  };
-
-  const onSubmit = () => {
-    props.onSubmit(audioBlob);
-    setAudioBlob(undefined);
-  };
-
-  const onClose = () => {
-    props.onClose();
-    setAudioBlob(undefined);
-  };
-
-  return (
-    <Modal
-      show={props.show}
-      title='Record'
-      content={
-        <>
-          Record audio using your microphone. Please make sure you have permission from everyone involved before you start recording.
-          <AudioRecorder
-            onRecordingProgress={(blob) => {
-              props.onProgress(blob);
-            }}
-            onRecordingComplete={onRecordingComplete}
+      {showModal && (
+        <React.Suspense fallback={null}>
+          <RecordModal
+            show={showModal}
+            onSubmit={onSubmit}
+            onProgress={() => { }}
+            onClose={onClose}
           />
-        </>
-      }
-      onClose={onClose}
-      submitText='Submit'
-      submitEnabled={audioBlob !== undefined}
-      onSubmit={onSubmit}
-    />
+        </React.Suspense>
+      )}
+    </>
   );
 }
 

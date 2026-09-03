@@ -36,6 +36,10 @@ function App() {
     window.localStorage.setItem("whisper-web-theme", isDark ? "dark" : "light");
   }, [isDark]);
 
+  const handleThemeToggle = useCallback(() => {
+    setIsDark((current) => !current);
+  }, []);
+
   const savedChunks =
     savedTranscript && savedTranscript.source === transcriber.output
       ? savedTranscript.chunks
@@ -46,36 +50,40 @@ function App() {
       : undefined;
   const previewChunks = draftChunks ?? savedChunks;
 
-  const startEditing = () => {
+  const startEditing = useCallback(() => {
     const output = transcriber.output;
     if (!output || output.isBusy) {
       return;
     }
 
     setDraftTranscript({ source: output, chunks: savedChunks ?? output.chunks });
-  };
+  }, [transcriber.output, savedChunks]);
 
-  const handleChunkUpdate = (
-    index: number,
-    updatedChunk: { text: string; timestamp: [number, number | null] }
-  ) => {
-    const output = transcriber.output;
-    if (!output || output.isBusy) {
-      return;
-    }
+  const handleChunkUpdate = useCallback(
+    (
+      index: number,
+      updatedChunk: { text: string; timestamp: [number, number | null] },
+    ) => {
+      const output = transcriber.output;
+      if (!output || output.isBusy) {
+        return;
+      }
 
-    setDraftTranscript((current) => {
-      const chunks = current?.source === output ? current.chunks : output.chunks;
-      return {
-        source: output,
-        chunks: chunks.map((chunk, chunkIndex) =>
-          chunkIndex === index ? updatedChunk : chunk,
-        ),
-      };
-    });
-  };
+      setDraftTranscript((current) => {
+        const chunks =
+          current?.source === output ? current.chunks : output.chunks;
+        return {
+          source: output,
+          chunks: chunks.map((chunk, chunkIndex) =>
+            chunkIndex === index ? updatedChunk : chunk,
+          ),
+        };
+      });
+    },
+    [transcriber.output],
+  );
 
-  const saveEdits = () => {
+  const saveEdits = useCallback(() => {
     if (draftTranscript && draftTranscript.source === transcriber.output) {
       setSavedTranscript({
         source: draftTranscript.source,
@@ -83,11 +91,11 @@ function App() {
       });
     }
     setDraftTranscript(undefined);
-  };
+  }, [draftTranscript, transcriber.output]);
 
-  const cancelEdits = () => {
+  const cancelEdits = useCallback(() => {
     setDraftTranscript(undefined);
-  };
+  }, []);
 
   const handleSeekReady = useCallback((seekTo: (time: number) => void) => {
     mediaSeekRef.current = seekTo;
@@ -97,7 +105,7 @@ function App() {
     mediaSeekRef.current?.(time);
   }, []);
 
-  const handleGenerateSummary = () => {
+  const handleGenerateSummary = useCallback(() => {
     const text = savedChunks
       ?.map((chunk) => chunk.text)
       .join(" ")
@@ -106,7 +114,7 @@ function App() {
     if (text) {
       transcriber.summarize(text);
     }
-  };
+  }, [savedChunks, transcriber]);
 
   return (
     <div className='app-layout'>
@@ -147,11 +155,11 @@ function App() {
             onPlaybackRateChange={setPlaybackRate}
           />
         </div>
-      </main>
+      </main >
       <aside>
         <ApplicationControls
           isDark={isDark}
-          onThemeToggle={() => setIsDark((current) => !current)}
+          onThemeToggle={handleThemeToggle}
           transcriber={transcriber}
           isAutoScrollEnabled={isAutoScrollEnabled}
           setIsAutoScrollEnabled={setIsAutoScrollEnabled}
@@ -161,7 +169,7 @@ function App() {
         <p>Transcription is powered by machine learning models downloaded directly to your browser's local memory. Processing speed depends on your device's processing power. You can explore and switch models in <em>Settings.</em></p>
         <p><strong>Note:</strong> This website works best in Google Chrome or Microsoft Edge on a desktop. Mobile devices may offer limited functionality.</p>
       </footer>
-    </div>
+    </div >
   );
 }
 

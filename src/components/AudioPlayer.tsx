@@ -80,8 +80,17 @@ export default function AudioPlayer(props: {
         return `${index + 1}\n${formatSrtTimeRange(start, end).replace(/,/g, ".")}\n${chunk.text.trim()}`;
       })
       .join("\n\n");
-    return `data:text/vtt;charset=utf-8,${encodeURIComponent(`WEBVTT\n\n${cues}\n`)}`;
+
+    return URL.createObjectURL(new Blob([`WEBVTT\n\n${cues}\n`], { type: "text/vtt" }));
   }, [props.isTranscribing, props.mimeType, props.transcriptChunks]);
+
+  useEffect(() => {
+    return () => {
+      if (subtitleUrl) {
+        URL.revokeObjectURL(subtitleUrl);
+      }
+    };
+  }, [subtitleUrl]);
 
   return (
     <div className='flex relative z-10 p-4 w-full mt-1'>

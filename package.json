@@ -15,12 +15,9 @@
     "@floating-ui/react": "^0.27.20",
     "@headlessui/react": "^2.2.9",
     "@huggingface/transformers": "3.8.1",
-    "axios": "^1.14.0",
-    "i18next": "^26.0.2",
     "parakeet.wgsl": "^1.0.1",
     "react": "^19.2.4",
-    "react-dom": "^19.2.4",
-    "react-i18next": "^17.0.1"
+    "react-dom": "^19.2.4"
   },
   "devDependencies": {
     "@eslint/js": "^9",
