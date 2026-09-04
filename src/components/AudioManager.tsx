@@ -21,6 +21,12 @@ import {
   SettingsIcon,
 } from "../utils/Icons";
 import { isPrivateOrLocalHost } from "../utils/AudioUtils";
+import {
+  AudioBufferSink,
+  BlobSource,
+  Input,
+  MP4,
+} from "mediabunny";
 
 const SettingsModal = React.lazy(() => import("./SettingsModal"));
 const RecordModal = React.lazy(() => import("./RecordModal"));
@@ -29,10 +35,8 @@ const INVALID_AUDIO_LINK = "INVALID_AUDIO_LINK";
 const INVALID_URL_SCHEME = "INVALID_URL_SCHEME";
 const INVALID_URL_FORMAT = "INVALID_URL_FORMAT";
 const INVALID_PRIVATE_URL = "INVALID_PRIVATE_URL";
-const FILE_TOO_LARGE = "FILE_TOO_LARGE";
 const AUDIO_TOO_LONG = "AUDIO_TOO_LONG";
 const SUSPECTED_DECOMPRESSION_BOMB = "SUSPECTED_DECOMPRESSION_BOMB";
-const MAX_AUDIO_DOWNLOAD_BYTES = 500 * 1024 * 1024; // 500 MB
 const MAX_AUDIO_DURATION_SECONDS = 4 * 60 * 60; // 4 hours maximum
 const MIN_BYTES_PER_SECOND = 1000; // ~8 kbps minimum for long audio (>30m)
 
@@ -90,9 +94,6 @@ function getAudioUrlErrorMessage(error: unknown): string {
   if (error instanceof Error) {
     if (error.name === "AbortError") {
       return "";
-    }
-    if (error.message === FILE_TOO_LARGE) {
-      return "The audio file exceeds the maximum allowed download size (500 MB). Please use a smaller file or extract the audio track first.";
     }
     if (error.message === AUDIO_TOO_LONG) {
       return "The audio duration exceeds the maximum allowed length (4 hours). Please use a shorter file or split the audio first.";
@@ -189,8 +190,76 @@ function validateAudioMetadata(duration: number, byteLength: number): void {
 }
 
 async function decodeAudioBuffer(
-  arrayBuffer: ArrayBuffer,
+  data: Blob | ArrayBuffer,
+  mimeType = "",
+  onProgress?: (progress: number) => void,
 ): Promise<AudioBuffer> {
+  if (mimeType === "video/mp4" || mimeType === "application/mp4") {
+    const blob = data instanceof Blob
+      ? data
+      : new Blob([data], { type: mimeType });
+    const input = new Input({
+      source: new BlobSource(blob),
+      formats: [MP4],
+    });
+
+    try {
+      const audioTrack = await input.getPrimaryAudioTrack();
+      if (!audioTrack) {
+        throw new Error("The video does not contain an audio track.");
+      }
+      if (!(await audioTrack.canDecode())) {
+        throw new Error("This browser cannot decode the video's audio codec.");
+      }
+
+      const duration = await input.computeDuration([audioTrack]);
+      const sink = new AudioBufferSink(audioTrack);
+      const chunks: AudioBuffer[] = [];
+      let totalLength = 0;
+      let sampleRate = Constants.SAMPLING_RATE;
+
+      for await (const wrapped of sink.buffers()) {
+        chunks.push(wrapped.buffer);
+        totalLength += wrapped.buffer.length;
+        sampleRate = wrapped.buffer.sampleRate;
+        if (duration > 0) {
+          onProgress?.(
+            Math.min(1, (wrapped.timestamp + wrapped.duration) / duration),
+          );
+        }
+      }
+
+      if (chunks.length === 0 || totalLength === 0) {
+        throw new Error("The video does not contain decodable audio.");
+      }
+
+      const outputContext = new AudioContext({ sampleRate });
+      try {
+        const output = outputContext.createBuffer(1, totalLength, sampleRate);
+        const samples = output.getChannelData(0);
+        let offset = 0;
+        for (const chunk of chunks) {
+          const channelCount = Math.max(1, chunk.numberOfChannels);
+          for (let index = 0; index < chunk.length; index++) {
+            let sample = 0;
+            for (let channel = 0; channel < channelCount; channel++) {
+              sample += chunk.getChannelData(channel)[index] / channelCount;
+            }
+            samples[offset + index] = sample;
+          }
+          offset += chunk.length;
+        }
+        return output;
+      } finally {
+        void outputContext.close().catch(() => undefined);
+      }
+    } finally {
+      input.dispose();
+    }
+  }
+
+  const arrayBuffer =
+    data instanceof Blob ? await data.arrayBuffer() : data;
   const audioCTX =
     typeof OfflineAudioContext !== "undefined"
       ? new OfflineAudioContext(1, 1, Constants.SAMPLING_RATE)
@@ -233,6 +302,8 @@ export const AudioManager = React.memo(function AudioManager(props: {
   isEditing?: boolean;
 }) {
   const [isAudioProcessing, setIsAudioProcessing] = useState(false);
+  const [audioProcessingProgress, setAudioProcessingProgress] =
+    useState<number | null>(null);
   const [audioReadyAnnouncement, setAudioReadyAnnouncement] = useState("");
   const [audioError, setAudioError] = useState<string | null>(null);
   const transcribeButtonRef = useRef<HTMLButtonElement | null>(null);
@@ -384,7 +455,7 @@ export const AudioManager = React.memo(function AudioManager(props: {
         if (duration > 0) {
           validateAudioMetadata(duration, blob.size);
         }
-        const decoded = await decodeAudioBuffer(data);
+        const decoded = await decodeAudioBuffer(blob, mimeType);
         validateAudioMetadata(decoded.duration, blob.size);
         checkAndResetIfMismatched(decoded.duration);
         setAudioData({
@@ -408,8 +479,7 @@ export const AudioManager = React.memo(function AudioManager(props: {
     resetAudio();
     const blobUrl = URL.createObjectURL(data);
     try {
-      const arrayBuffer = await data.arrayBuffer();
-      const decoded = await decodeAudioBuffer(arrayBuffer);
+      const decoded = await decodeAudioBuffer(data, data.type);
       checkAndResetIfMismatched(decoded.duration);
       setAudioData({
         buffer: decoded,
@@ -428,7 +498,6 @@ export const AudioManager = React.memo(function AudioManager(props: {
 
   const downloadAudioFromUrl = useCallback(
     async (requestAbortController: AbortController, url: string) => {
-      let isSizeExceeded = false;
       try {
         setAudioData(undefined);
         setAudioError(null);
@@ -448,15 +517,6 @@ export const AudioManager = React.memo(function AudioManager(props: {
           throw new Error(`HTTP_${response.status}`);
         }
 
-        const contentLengthHeader =
-          response.headers.get("content-length");
-        const contentLength = contentLengthHeader
-          ? Number(contentLengthHeader)
-          : 0;
-        if (contentLength > MAX_AUDIO_DOWNLOAD_BYTES) {
-          throw new Error(FILE_TOO_LARGE);
-        }
-
         let mimeType = response.headers.get("content-type") || "";
         if (mimeType.startsWith("text/html")) {
           throw new Error(INVALID_AUDIO_LINK);
@@ -465,9 +525,6 @@ export const AudioManager = React.memo(function AudioManager(props: {
         const reader = response.body?.getReader();
         if (!reader) {
           const buffer = await response.arrayBuffer();
-          if (buffer.byteLength > MAX_AUDIO_DOWNLOAD_BYTES) {
-            throw new Error(FILE_TOO_LARGE);
-          }
           if (!mimeType || mimeType === "audio/wave") {
             const pathname = parsedUrl.pathname.toLowerCase();
             if (pathname.endsWith(".webm")) {
@@ -487,17 +544,10 @@ export const AudioManager = React.memo(function AudioManager(props: {
         }
 
         const chunks: Uint8Array[] = [];
-        let receivedBytes = 0;
 
         while (true) {
           const { done, value } = await reader.read();
           if (done) break;
-          receivedBytes += value.byteLength;
-          if (receivedBytes > MAX_AUDIO_DOWNLOAD_BYTES) {
-            isSizeExceeded = true;
-            requestAbortController.abort();
-            throw new Error(FILE_TOO_LARGE);
-          }
           chunks.push(value);
         }
 
@@ -522,13 +572,6 @@ export const AudioManager = React.memo(function AudioManager(props: {
           parsedUrl.pathname.includes("video-demo.webm");
         await setAudioFromDownload(data, mimeType, isSampleVideo);
       } catch (error) {
-        if (isSizeExceeded) {
-          setAudioError(
-            getAudioUrlErrorMessage(new Error(FILE_TOO_LARGE)),
-          );
-          return;
-        }
-
         if (error instanceof Error && error.name === "AbortError") {
           return;
         }
@@ -608,25 +651,26 @@ export const AudioManager = React.memo(function AudioManager(props: {
               onMouseLeave={() => setIsHoveringFile(false)}
               onFocus={() => setIsHoveringFile(true)}
               onBlur={() => setIsHoveringFile(false)}
-              onProcessingChange={setIsAudioProcessing}
+              onProcessingChange={(isProcessing) => {
+                setIsAudioProcessing(isProcessing);
+                if (!isProcessing) setAudioProcessingProgress(null);
+              }}
+              onProcessingProgress={setAudioProcessingProgress}
               onFileError={(error) => {
                 console.error("Failed to load file:", error);
                 setAudioError(
                   error instanceof Error &&
-                    error.message === FILE_TOO_LARGE
-                    ? "The file exceeds the maximum allowed size (500 MB). Please use a smaller file or extract the audio track first."
+                    error.message === AUDIO_TOO_LONG
+                    ? "The audio duration exceeds the maximum allowed length (4 hours). Please use a shorter file or split the audio first."
                     : error instanceof Error &&
-                      error.message === AUDIO_TOO_LONG
-                      ? "The audio duration exceeds the maximum allowed length (4 hours). Please use a shorter file or split the audio first."
-                      : error instanceof Error &&
-                        error.message ===
-                        SUSPECTED_DECOMPRESSION_BOMB
-                        ? "The audio file has an abnormally high compression ratio and cannot be safely decoded in the browser."
-                        : error instanceof DOMException &&
-                          error.name ===
-                          "QuotaExceededError"
-                          ? "The file is too large for the browser's available memory. Try extracting the audio track (e.g. to MP3 or WAV) first."
-                          : "The file could not be decoded as audio. Please check that it is a supported audio or video format.",
+                      error.message ===
+                      SUSPECTED_DECOMPRESSION_BOMB
+                      ? "The audio file has an abnormally high compression ratio and cannot be safely decoded in the browser."
+                      : error instanceof DOMException &&
+                        error.name ===
+                        "QuotaExceededError"
+                        ? "The file is too large for the browser's available memory. Try extracting the audio track (e.g. to MP3 or WAV) first."
+                        : "The file could not be decoded as audio. Please check that it is a supported audio or video format.",
                 );
               }}
               onFileUpdate={async (
@@ -731,7 +775,9 @@ export const AudioManager = React.memo(function AudioManager(props: {
       {isAudioProcessing && (
         <div className='audio-processing-status'>
           <span className='audio-processing-status__spinner' />
-          Processing audio…
+          {audioProcessingProgress === null
+            ? "Processing audio…"
+            : `Extracting audio… ${Math.min(100, Math.round(audioProcessingProgress * 100))}%`}
         </div>
       )}
       {audioError && (
@@ -1159,6 +1205,7 @@ function FileTile(props: {
   icon: JSX.Element;
   text: string;
   onProcessingChange: (isProcessing: boolean) => void;
+  onProcessingProgress?: (progress: number) => void;
   onFileError?: (error: unknown) => void;
   onFileUpdate: (
     decoded: AudioBuffer | undefined,
@@ -1189,12 +1236,6 @@ function FileTile(props: {
 
     if (!isAudioVideo && !isSubtitle) return;
 
-    if (file.size > MAX_AUDIO_DOWNLOAD_BYTES) {
-      props.onFileError?.(new Error(FILE_TOO_LARGE));
-      event.target.value = "";
-      return;
-    }
-
     // Only create an object URL for audio/video media (subtitles do not play media)
     const urlObj = isAudioVideo ? URL.createObjectURL(file) : "";
     const mimeType =
@@ -1202,45 +1243,38 @@ function FileTile(props: {
 
     props.onProcessingChange(true);
 
-    const reader = new FileReader();
-    reader.addEventListener("load", async (e) => {
+    const processAudioFile = async () => {
       try {
-        if (isSubtitle) {
-          props.onFileUpdate(
-            undefined,
-            file,
-            file.name,
-            "",
-            mimeType,
-          );
-        } else {
-          const arrayBuffer = e.target?.result as ArrayBuffer;
-          if (!arrayBuffer) {
-            if (urlObj) URL.revokeObjectURL(urlObj);
-            return;
-          }
-
-          const { duration } = await probeAudioMetadata(file);
-          if (duration > 0) {
-            validateAudioMetadata(duration, file.size);
-          }
-
-          const decoded = await decodeAudioBuffer(arrayBuffer);
-          validateAudioMetadata(decoded.duration, file.size);
-          props.onFileUpdate(
-            decoded,
-            file,
-            file.name,
-            urlObj,
-            mimeType,
-          );
+        const { duration } = await probeAudioMetadata(file);
+        if (duration > 0) {
+          validateAudioMetadata(duration, file.size);
         }
+
+        const decoded = await decodeAudioBuffer(
+          file,
+          mimeType,
+          props.onProcessingProgress,
+        );
+        validateAudioMetadata(decoded.duration, file.size);
+        props.onFileUpdate(
+          decoded,
+          file,
+          file.name,
+          urlObj,
+          mimeType,
+        );
       } catch (error) {
         if (urlObj) URL.revokeObjectURL(urlObj);
         props.onFileError?.(error);
       } finally {
         props.onProcessingChange(false);
       }
+    };
+
+    const reader = new FileReader();
+    reader.addEventListener("load", () => {
+      props.onFileUpdate(undefined, file, file.name, "", mimeType);
+      props.onProcessingChange(false);
     });
 
     reader.addEventListener("error", () => {
@@ -1249,11 +1283,8 @@ function FileTile(props: {
       props.onProcessingChange(false);
     });
 
-    if (isSubtitle) {
-      reader.readAsText(file);
-    } else {
-      reader.readAsArrayBuffer(file);
-    }
+    if (isSubtitle) reader.readAsText(file);
+    else void processAudioFile();
 
     // Reset files
     event.target.value = "";
