@@ -220,6 +220,35 @@ const MAX_CPS = 20.0; // Fast Dialogue Max reading speed: 20 CPS
 const VISIBLE_LENGTH_CACHE_MAX_SIZE = 2000;
 const visibleLengthCache = new Map<string, number>();
 
+function getFallbackVisibleLength(str: string): number {
+  let length = 0;
+  let index = 0;
+
+  while (index < str.length) {
+    if (str[index] === "<") {
+      const tagEnd = str.indexOf(">", index + 1);
+      if (tagEnd !== -1) {
+        index = tagEnd + 1;
+        continue;
+      }
+    }
+
+    if (str[index] === "&") {
+      const entityEnd = str.indexOf(";", index + 1);
+      if (entityEnd !== -1) {
+        index = entityEnd + 1;
+        length++;
+        continue;
+      }
+    }
+
+    length++;
+    index++;
+  }
+
+  return length;
+}
+
 /**
  * Returns visible character length ignoring HTML/VTT tags and entities
  * using the browser's native parser to avoid flawed regex sanitization.
@@ -245,11 +274,11 @@ export function getVisibleLength(str: string): number {
       const doc = parser.parseFromString(str, "text/html");
       length = (doc.body?.textContent || "").length;
     } catch {
-      length = str.replace(/<[^>]+>/g, "").length;
+      length = getFallbackVisibleLength(str);
     }
   } else {
     // Fallback if DOMParser is unavailable (e.g. Node/SSR)
-    length = str.replace(/<[^>]+>/g, "").length;
+    length = getFallbackVisibleLength(str);
   }
 
   if (visibleLengthCache.size >= VISIBLE_LENGTH_CACHE_MAX_SIZE) {
