@@ -777,7 +777,7 @@ export const AudioManager = React.memo(function AudioManager(props: {
           <span className='audio-processing-status__spinner' />
           {audioProcessingProgress === null
             ? "Processing audio…"
-            : `Extracting audio… ${Math.min(100, Math.round(audioProcessingProgress * 100))}%`}
+            : `Processing audio… ${Math.min(100, Math.round(audioProcessingProgress * 100))}%`}
         </div>
       )}
       {audioError && (
