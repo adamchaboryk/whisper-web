@@ -214,14 +214,26 @@ async function decodeAudioBuffer(
 
       const duration = await input.computeDuration([audioTrack]);
       const sink = new AudioBufferSink(audioTrack);
-      const chunks: AudioBuffer[] = [];
+      const chunks: Float32Array[] = [];
       let totalLength = 0;
       let sampleRate = Constants.SAMPLING_RATE;
 
       for await (const wrapped of sink.buffers()) {
-        chunks.push(wrapped.buffer);
-        totalLength += wrapped.buffer.length;
-        sampleRate = wrapped.buffer.sampleRate;
+        const chunk = wrapped.buffer;
+        const channelCount = Math.max(1, chunk.numberOfChannels);
+        const channelData = Array.from(
+          { length: channelCount },
+          (_, channel) => chunk.getChannelData(channel),
+        );
+        const mono = new Float32Array(chunk.length);
+        for (let index = 0; index < chunk.length; index++) {
+          for (const channel of channelData) {
+            mono[index] += channel[index] / channelCount;
+          }
+        }
+        chunks.push(mono);
+        totalLength += mono.length;
+        sampleRate = chunk.sampleRate;
         if (duration > 0) {
           onProgress?.(
             Math.min(1, (wrapped.timestamp + wrapped.duration) / duration),
@@ -239,14 +251,7 @@ async function decodeAudioBuffer(
         const samples = output.getChannelData(0);
         let offset = 0;
         for (const chunk of chunks) {
-          const channelCount = Math.max(1, chunk.numberOfChannels);
-          for (let index = 0; index < chunk.length; index++) {
-            let sample = 0;
-            for (let channel = 0; channel < channelCount; channel++) {
-              sample += chunk.getChannelData(channel)[index] / channelCount;
-            }
-            samples[offset + index] = sample;
-          }
+          samples.set(chunk, offset);
           offset += chunk.length;
         }
         return output;
