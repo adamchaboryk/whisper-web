@@ -118,6 +118,7 @@ export default function AudioPlayer(props: {
           />
           {subtitleUrl && (
             <track
+              key={subtitleUrl}
               kind='captions'
               label='Transcript'
               src={subtitleUrl}

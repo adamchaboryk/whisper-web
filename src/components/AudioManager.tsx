@@ -337,6 +337,7 @@ export const AudioManager = React.memo(function AudioManager(props: {
 
   const [showWarningModal, setShowWarningModal] = useState(false);
   const [isHoveringFile, setIsHoveringFile] = useState(false);
+  const transcriptFileInputRef = useRef<HTMLInputElement>(null);
 
   const checkAndResetIfMismatched = useCallback(
     (audioDuration: number) => {
@@ -373,6 +374,35 @@ export const AudioManager = React.memo(function AudioManager(props: {
       startTranscription();
     }
   }, [startTranscription]);
+
+  const handleTranscriptImport = useCallback(
+    async (event: React.ChangeEvent<HTMLInputElement>) => {
+      const file = event.target.files?.[0];
+      event.target.value = "";
+      if (!file) return;
+
+      const extension = file.name.split(".").pop()?.toLowerCase();
+      if (extension !== "srt" && extension !== "vtt") {
+        setAudioError("Choose an SRT or VTT transcript file.");
+        return;
+      }
+
+      const parsed = parseSubtitleFile(await file.text(), extension);
+      if (!parsed.chunks.length) {
+        setAudioError("The transcript file does not contain any subtitle cues.");
+        return;
+      }
+
+      props.transcriber.setTranscript({
+        isBusy: false,
+        text: parsed.text,
+        chunks: parsed.chunks,
+        progress: 100,
+      });
+      setAudioError(null);
+    },
+    [props.transcriber],
+  );
 
   const isTranscriptLengthMismatched = useMemo(() => {
     if (!props.transcriptChunks?.length || !audioData?.buffer?.duration)
@@ -745,7 +775,7 @@ export const AudioManager = React.memo(function AudioManager(props: {
           className={`absolute top-full left-1/2 -translate-x-1/2 flex justify-center transition-all duration-300 ${isHoveringFile ? "translate-y-0 opacity-100" : "-translate-y-full opacity-0 pointer-events-none"}`}
         >
           <div id='file-upload-ribbon' className='file-upload-ribbon'>
-            Upload audio, video, or existing transcripts.
+            Add audio or video from your device.
           </div>
         </div>
       </div>
@@ -827,23 +857,46 @@ export const AudioManager = React.memo(function AudioManager(props: {
             </p>
           )}
 
-          <div className='relative w-full flex justify-center items-center mt-2 gap-3'>
+          <div className='relative w-full flex flex-col justify-center items-center mt-2 gap-1'>
+            <input
+              ref={transcriptFileInputRef}
+              type='file'
+              accept='.srt,.vtt,text/srt,text/vtt'
+              className='sr-only'
+              tabIndex={-1}
+              aria-hidden='true'
+              onChange={handleTranscriptImport}
+            />
             {(!props.transcriber.output ||
               props.transcriber.isBusy ||
               isTranscriptLengthMismatched ||
               isModelChanged) && (
-                <TranscribeButton
-                  ref={transcribeButtonRef}
-                  onClick={handleTranscribeClick}
-                  isModelLoading={
-                    props.transcriber.isModelLoading
-                  }
-                  modelLoadingProgress={overallModelLoadProgress}
-                  isTranscribing={props.transcriber.isBusy}
-                  transcribingProgress={
-                    props.transcriber.output?.progress
-                  }
-                />
+                <>
+                  <TranscribeButton
+                    ref={transcribeButtonRef}
+                    onClick={handleTranscribeClick}
+                    isModelLoading={
+                      props.transcriber.isModelLoading
+                    }
+                    modelLoadingProgress={overallModelLoadProgress}
+                    isTranscribing={props.transcriber.isBusy}
+                    transcribingProgress={
+                      props.transcriber.output?.progress
+                    }
+                  />
+                  {audioData.mimeType.startsWith("video/") && (
+                    <p className='text-sm text-slate-600 dark:text-slate-300'>
+                      ...or add{" "}
+                      <button
+                        type='button'
+                        onClick={() => transcriptFileInputRef.current?.click()}
+                        className='demo'
+                      >
+                        existing transcript.
+                      </button>
+                    </p>
+                  )}
+                </>
               )}
           </div>
 

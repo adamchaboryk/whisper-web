@@ -2,7 +2,6 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { ApplicationControls, AudioManager } from "./components/AudioManager";
 import Transcript from "./components/Transcript";
 import { TranscriberData, useTranscriber } from "./hooks/useTranscriber";
-import { formatSrtChunks } from "./utils/SubtitleUtils";
 
 function App() {
   const transcriber = useTranscriber();
@@ -15,6 +14,7 @@ function App() {
     source: TranscriberData;
     chunks: TranscriberData["chunks"];
   }>();
+  const draftTranscriptRef = useRef(draftTranscript);
   const timeSubscribersRef = useRef<Set<(time: number) => void>>(new Set());
   const handleTimeUpdate = useCallback((time: number) => {
     for (const subscriber of timeSubscribersRef.current) {
@@ -70,7 +70,9 @@ function App() {
       return;
     }
 
-    setDraftTranscript({ source: output, chunks: savedChunks ?? output.chunks });
+    const draft = { source: output, chunks: savedChunks ?? output.chunks };
+    draftTranscriptRef.current = draft;
+    setDraftTranscript(draft);
   }, [transcriber.output, savedChunks]);
 
   const handleChunkUpdate = useCallback(
@@ -83,31 +85,35 @@ function App() {
         return;
       }
 
-      setDraftTranscript((current) => {
-        const chunks =
-          current?.source === output ? current.chunks : output.chunks;
-        return {
-          source: output,
-          chunks: chunks.map((chunk, chunkIndex) =>
-            chunkIndex === index ? updatedChunk : chunk,
-          ),
-        };
-      });
+      const currentDraft = draftTranscriptRef.current;
+      const chunks =
+        currentDraft?.source === output ? currentDraft.chunks : output.chunks;
+      const next = {
+        source: output,
+        chunks: chunks.map((chunk, chunkIndex) =>
+          chunkIndex === index ? updatedChunk : chunk,
+        ),
+      };
+      draftTranscriptRef.current = next;
+      setDraftTranscript(next);
     },
     [transcriber.output],
   );
 
   const saveEdits = useCallback(() => {
-    if (draftTranscript && draftTranscript.source === transcriber.output) {
+    const currentDraft = draftTranscriptRef.current;
+    if (currentDraft && currentDraft.source === transcriber.output) {
       setSavedTranscript({
-        source: draftTranscript.source,
-        chunks: formatSrtChunks(draftTranscript.chunks),
+        source: currentDraft.source,
+        chunks: currentDraft.chunks,
       });
     }
+    draftTranscriptRef.current = undefined;
     setDraftTranscript(undefined);
-  }, [draftTranscript, transcriber.output]);
+  }, [transcriber.output]);
 
   const cancelEdits = useCallback(() => {
+    draftTranscriptRef.current = undefined;
     setDraftTranscript(undefined);
   }, []);
 

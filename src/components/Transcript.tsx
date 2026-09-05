@@ -26,7 +26,11 @@ import {
   formatSrtTimeRange,
   parseAudioTimestamp,
 } from "../utils/AudioUtils";
-import { formatSrtChunks, sanitizeHTML } from "../utils/SubtitleUtils";
+import {
+  formatSrtChunks,
+  MAX_LINE_CHARACTERS,
+  sanitizeHTML,
+} from "../utils/SubtitleUtils";
 import { resolveLanguageAndDirection } from "../utils/LanguageUtils";
 import { Spinner } from "./TranscribeButton";
 
@@ -63,6 +67,8 @@ function formatTranscriptionDuration(seconds: number): string {
   const remainingSeconds = seconds - minutes * 60;
   return `${minutes} minute${minutes === 1 ? "" : "s"} ${remainingSeconds.toFixed(0)} seconds`;
 }
+
+const AUTO_SCROLL_RESUME_DELAY = 5000;
 
 function ClipboardIcon(props: { className?: string }) {
   return (
@@ -137,12 +143,6 @@ function EditableChunk(props: {
     }
   }, [props.text]);
 
-  const handleInput = (event: React.FormEvent<HTMLDivElement>) => {
-    const html = event.currentTarget.innerHTML;
-    const sanitized = sanitizeHTML(html);
-    props.onTextChange?.(sanitized);
-  };
-
   const handlePaste = (event: React.ClipboardEvent<HTMLDivElement>) => {
     event.preventDefault();
     const text = event.clipboardData.getData("text/plain");
@@ -155,11 +155,6 @@ function EditableChunk(props: {
           .insertNode(document.createTextNode(text));
         selection.collapseToEnd();
       }
-    }
-    if (editorRef.current) {
-      const html = editorRef.current.innerHTML;
-      const sanitized = sanitizeHTML(html);
-      props.onTextChange?.(sanitized);
     }
   };
 
@@ -174,8 +169,10 @@ function EditableChunk(props: {
       role='textbox'
       aria-multiline='true'
       aria-label={props.label}
-      onInput={handleInput}
       onPaste={handlePaste}
+      onBlur={(event) =>
+        props.onTextChange?.(sanitizeHTML(event.currentTarget.innerHTML))
+      }
     />
   );
 }
@@ -303,6 +300,13 @@ const TranscriptSegment = memo(function TranscriptSegment({
     () => sanitizeHTML(chunk.text).trimStart(),
     [chunk.text],
   );
+  const hasLongLine = useMemo(
+    () =>
+      extractPlainText(sanitizedText)
+        .split(/\r?\n/)
+        .some((line) => line.length > MAX_LINE_CHARACTERS),
+    [sanitizedText],
+  );
 
   return (
     <div
@@ -310,44 +314,67 @@ const TranscriptSegment = memo(function TranscriptSegment({
       className={`transcript-segment ${isActive ? "active-segment" : ""}`}
       aria-current={isActive ? "true" : undefined}
     >
-      {isEditing ? (
-        <>
-          <EditableTimestamp
-            timestamp={chunk.timestamp[0]}
-            label={`Start time ${index + 1}`}
-            onTimestampChange={(newTimestamp) => {
-              onChunkUpdate?.(index, {
-                ...chunk,
-                timestamp: [newTimestamp, chunk.timestamp[1]],
-              });
-            }}
-          />
-          <EditableChunk
-            text={chunk.text.trimStart()}
-            label={`Text ${index + 1}`}
-            lang={lang}
-            dir={dir}
-            onTextChange={(text) =>
-              onChunkUpdate?.(index, { ...chunk, text })
-            }
-          />
-        </>
-      ) : (
-        <>
-          <TimestampButton
-            onMount={(element) => onButtonMount(element, index)}
-            timestamp={chunk.timestamp[0]}
-            onClick={() => onSeekTo?.(chunk.timestamp[0])}
-            onKeyDown={(e) => onKeyDown(e, index)}
-            tabIndex={tabIndex}
-            onHover={onTimestampHover}
-          />
-          <div
-            className='flex-1 whitespace-pre-wrap'
-            dangerouslySetInnerHTML={{ __html: sanitizedText }}
-          />
-        </>
+      {isEditing && hasLongLine && (
+        <div
+          className='mb-2 flex w-full items-center gap-1.5 text-sm font-medium text-amber-700 dark:text-amber-300'
+          role='note'
+        >
+          <svg
+            aria-hidden='true'
+            viewBox='0 0 24 24'
+            fill='none'
+            stroke='currentColor'
+            strokeWidth='2'
+            strokeLinecap='round'
+            strokeLinejoin='round'
+            className='h-4 w-4 shrink-0'
+          >
+            <path d='M10.3 3.8 2.2 18a2 2 0 0 0 1.7 3h16.2a2 2 0 0 0 1.7-3L13.7 3.8a2 2 0 0 0-3.4 0Z' />
+            <path d='M12 9v4M12 17h.01' />
+          </svg>
+          <span>One or more lines are over {MAX_LINE_CHARACTERS} characters, which can cut off words or block the video. To fix this, insert a line break at a natural grammatical pause or split the dialogue into two separate captions.</span>
+        </div>
       )}
+      <div className='flex w-full min-w-0 items-start'>
+        {isEditing ? (
+          <>
+            <EditableTimestamp
+              timestamp={chunk.timestamp[0]}
+              label={`Start time ${index + 1}`}
+              onTimestampChange={(newTimestamp) => {
+                onChunkUpdate?.(index, {
+                  ...chunk,
+                  timestamp: [newTimestamp, chunk.timestamp[1]],
+                });
+              }}
+            />
+            <EditableChunk
+              text={chunk.text.trimStart()}
+              label={`Text ${index + 1}`}
+              lang={lang}
+              dir={dir}
+              onTextChange={(text) =>
+                onChunkUpdate?.(index, { ...chunk, text })
+              }
+            />
+          </>
+        ) : (
+          <>
+            <TimestampButton
+              onMount={(element) => onButtonMount(element, index)}
+              timestamp={chunk.timestamp[0]}
+              onClick={() => onSeekTo?.(chunk.timestamp[0])}
+              onKeyDown={(e) => onKeyDown(e, index)}
+              tabIndex={tabIndex}
+              onHover={onTimestampHover}
+            />
+            <div
+              className='flex-1 whitespace-pre-wrap'
+              dangerouslySetInnerHTML={{ __html: sanitizedText }}
+            />
+          </>
+        )}
+      </div>
     </div>
   );
 });
@@ -628,6 +655,8 @@ const Transcript = memo(function Transcript({
   const activeChunkIndexRef = useRef<number>(-1);
   const [autoScrollPaused, setAutoScrollPaused] = useState(false);
   const prevTimeRef = useRef<number | undefined>(undefined);
+  const autoScrollResumeTimerRef = useRef<number | null>(null);
+  const programmaticScrollRef = useRef(false);
 
   const chunks = useMemo(
     () => editedChunks ?? transcribedData?.chunks ?? [],
@@ -747,6 +776,34 @@ const Transcript = memo(function Transcript({
     },
     [onSeekTo],
   );
+
+  const pauseAutoScrollAfterUserScroll = useCallback(() => {
+    if (autoScrollResumeTimerRef.current !== null) {
+      window.clearTimeout(autoScrollResumeTimerRef.current);
+    }
+
+    setAutoScrollPaused(true);
+    autoScrollResumeTimerRef.current = window.setTimeout(() => {
+      autoScrollResumeTimerRef.current = null;
+      setAutoScrollPaused(false);
+    }, AUTO_SCROLL_RESUME_DELAY);
+  }, []);
+
+  const resumeAutoScrollOnPointerLeave = useCallback(() => {
+    if (autoScrollResumeTimerRef.current !== null) {
+      window.clearTimeout(autoScrollResumeTimerRef.current);
+      autoScrollResumeTimerRef.current = null;
+    }
+    setAutoScrollPaused(false);
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      if (autoScrollResumeTimerRef.current !== null) {
+        window.clearTimeout(autoScrollResumeTimerRef.current);
+      }
+    };
+  }, []);
 
   const saveBlob = (blob: Blob, filename: string) => {
     const url = URL.createObjectURL(blob);
@@ -960,6 +1017,7 @@ saveBlob(blob, "transcript.json");
       const chunkElement = chunkRefs.current[index];
 
       if (chunkElement) {
+        programmaticScrollRef.current = true;
         requestAnimationFrame(() => {
           const containerCenter = container.clientHeight / 2;
           const chunkCenter = chunkElement.clientHeight / 2;
@@ -971,6 +1029,9 @@ saveBlob(blob, "transcript.json");
             top: scrollTop,
             behavior: "smooth",
           });
+          window.setTimeout(() => {
+            programmaticScrollRef.current = false;
+          }, 1000);
         });
       }
     }
@@ -1186,11 +1247,12 @@ saveBlob(blob, "transcript.json");
               aria-label='Transcript content'
               lang={transcriptLanguage}
               dir={transcriptDir}
-              onWheel={() => {
+              onScroll={() => {
+                if (!programmaticScrollRef.current) {
+                  pauseAutoScrollAfterUserScroll();
+                }
               }}
-              onMouseLeave={() => {
-                setAutoScrollPaused(false);
-              }}
+              onMouseLeave={resumeAutoScrollOnPointerLeave}
               onKeyDown={(event) => {
                 if (isEditing && event.key === "Escape") {
                   event.preventDefault();
@@ -1224,7 +1286,7 @@ saveBlob(blob, "transcript.json");
                     " ",
                   ].includes(event.key)
                 ) {
-                  setAutoScrollPaused(true);
+                  pauseAutoScrollAfterUserScroll();
                 }
               }}
             >

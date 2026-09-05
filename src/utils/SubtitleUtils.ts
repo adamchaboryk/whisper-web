@@ -208,7 +208,7 @@ export function parseSubtitleFile(text: string, type: "srt" | "vtt") {
   return { chunks, text: fullText };
 }
 
-const MAX_LINE_CHARACTERS = 42;
+export const MAX_LINE_CHARACTERS = 42;
 const MAX_LINES_PER_EVENT = 2;
 const MIN_SUBTITLE_DURATION = 1.0; // Minimum On-Screen Duration: 1.0 second
 const TECHNICAL_FLOOR_DURATION = 0.2; // Absolute technical floor: ~5 frames / 200ms
