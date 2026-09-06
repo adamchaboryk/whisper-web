@@ -119,16 +119,49 @@ function App() {
     [transcriber.output],
   );
 
-  const handleAddSegment = useCallback(
-    (index: number) => {
+  const handleSplitSegment = useCallback(
+    (
+      index: number,
+      before: string,
+      after: string,
+      beforeWordCount: number,
+    ) => {
       updateDraftChunks((chunks) => {
         const current = chunks[index];
-        const next = chunks[index + 1];
-        const start = current.timestamp[1] ?? current.timestamp[0] + 1;
-        const nextStart = next?.timestamp[0];
-        const end = nextStart && nextStart > start ? nextStart : start + 1;
-        const segment: TranscriptChunk = { text: "", timestamp: [start, end] };
-        return [...chunks.slice(0, index + 1), segment, ...chunks.slice(index + 1)];
+        const leftWords = current.words?.slice(0, beforeWordCount);
+        const rightWords = current.words?.slice(beforeWordCount);
+        const sourceStart = current.timestamp[0];
+        const sourceEnd = current.timestamp[1] ?? sourceStart + 1;
+        const precedingEnd =
+          leftWords?.[leftWords.length - 1]?.timestamp[1] ?? sourceStart;
+        const followingStart = rightWords?.[0]?.timestamp[0] ?? sourceEnd;
+        const wordBoundary = (precedingEnd + followingStart) / 2;
+        const adjacentStart =
+          chunks[index + 1]?.timestamp[0] > sourceStart
+            ? chunks[index + 1].timestamp[0]
+            : Math.max(sourceEnd, sourceStart + 0.084);
+        const splitStart = (sourceStart + adjacentStart) / 2;
+        const halfGap = Math.min(0.042, (sourceEnd - sourceStart) / 4);
+        const leftEnd = Math.max(
+          sourceStart,
+          Math.min(wordBoundary - halfGap, splitStart - halfGap),
+        );
+        const rightEnd = Math.max(
+          current.timestamp[1] ?? sourceEnd,
+          splitStart + halfGap,
+        );
+        const left: TranscriptChunk = {
+          ...current,
+          text: before,
+          timestamp: [sourceStart, leftEnd],
+          words: leftWords,
+        };
+        const right: TranscriptChunk = {
+          text: after,
+          timestamp: [splitStart, rightEnd],
+          words: rightWords,
+        };
+        return [...chunks.slice(0, index), left, right, ...chunks.slice(index + 1)];
       });
     },
     [updateDraftChunks],
@@ -137,9 +170,7 @@ function App() {
   const handleDeleteSegment = useCallback(
     (index: number) => {
       updateDraftChunks((chunks) =>
-        chunks.length > 1
-          ? chunks.filter((_, chunkIndex) => chunkIndex !== index)
-          : chunks,
+        chunks.filter((_, chunkIndex) => chunkIndex !== index),
       );
     },
     [updateDraftChunks],
@@ -212,7 +243,7 @@ function App() {
                 : transcriber.language)
             }
             onChunkUpdate={handleChunkUpdate}
-            onAddSegment={handleAddSegment}
+            onSplitSegment={handleSplitSegment}
             onDeleteSegment={handleDeleteSegment}
             onSeekTo={handleSeekTo}
             isEditing={Boolean(draftChunks)}

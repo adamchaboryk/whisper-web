@@ -6,7 +6,6 @@ import {
   useMemo,
   memo,
   useCallback,
-  type ReactNode,
 } from "react";
 import {
   FloatingArrow,
@@ -46,7 +45,12 @@ interface Props {
     index: number,
     updatedChunk: TranscriptChunk,
   ) => void;
-  onAddSegment?: (index: number) => void;
+  onSplitSegment?: (
+    index: number,
+    before: string,
+    after: string,
+    beforeWordCount: number,
+  ) => void;
   onDeleteSegment?: (index: number) => void;
   onSeekTo?: (time: number) => void;
   isEditing?: boolean;
@@ -136,8 +140,13 @@ function EditableChunk(props: {
   dir?: "rtl" | "ltr";
   lang?: string;
   onTextChange?: (text: string) => void;
+  onSplit?: (before: string, after: string, beforeWordCount: number) => void;
+  onDeleteEmpty?: () => void;
+  shouldFocus?: boolean;
+  focusAtEnd?: boolean;
 }) {
   const editorRef = useRef<HTMLDivElement>(null);
+  const isDeletingRef = useRef(false);
 
   useLayoutEffect(() => {
     const editor = editorRef.current;
@@ -148,6 +157,21 @@ function EditableChunk(props: {
       }
     }
   }, [props.text]);
+
+  useEffect(() => {
+    if (props.shouldFocus) {
+      const editor = editorRef.current;
+      editor?.focus();
+      if (editor && props.focusAtEnd) {
+        const range = document.createRange();
+        range.selectNodeContents(editor);
+        range.collapse(false);
+        const selection = window.getSelection();
+        selection?.removeAllRanges();
+        selection?.addRange(range);
+      }
+    }
+  }, [props.shouldFocus, props.focusAtEnd]);
 
   const handlePaste = (event: React.ClipboardEvent<HTMLDivElement>) => {
     event.preventDefault();
@@ -164,6 +188,59 @@ function EditableChunk(props: {
     }
   };
 
+  const handleKeyDown = (event: React.KeyboardEvent<HTMLDivElement>) => {
+    const editor = editorRef.current;
+    const selection = window.getSelection();
+    if (
+      (event.key === "Backspace" || event.key === "Delete") &&
+      editor &&
+      selection?.isCollapsed &&
+      editor.contains(selection.anchorNode) &&
+      !editor.textContent?.trim()
+    ) {
+      event.preventDefault();
+      isDeletingRef.current = true;
+      props.onDeleteEmpty?.();
+      return;
+    }
+
+    if (event.key !== "Enter" || event.shiftKey) return;
+
+    if (
+      !editor ||
+      !selection ||
+      !selection.rangeCount ||
+      !editor.contains(selection.anchorNode)
+    ) {
+      return;
+    }
+
+    if ((editor.innerText.match(/\n/g) ?? []).length < 1) return;
+
+    event.preventDefault();
+    const range = selection.getRangeAt(0);
+    const toHtml = (sourceRange: Range) => {
+      const container = document.createElement("div");
+      container.append(sourceRange.cloneContents());
+      return sanitizeHTML(container.innerHTML);
+    };
+    const beforeRange = range.cloneRange();
+    beforeRange.selectNodeContents(editor);
+    beforeRange.setEnd(range.startContainer, range.startOffset);
+    const afterRange = range.cloneRange();
+    afterRange.selectNodeContents(editor);
+    afterRange.setStart(range.endContainer, range.endOffset);
+    const before = toHtml(beforeRange);
+    const after = toHtml(afterRange);
+
+    editor.innerHTML = before;
+    props.onSplit?.(
+      before,
+      after,
+      extractPlainText(before).trim().split(/\s+/).filter(Boolean).length,
+    );
+  };
+
   return (
     <div
       ref={editorRef}
@@ -176,7 +253,9 @@ function EditableChunk(props: {
       aria-multiline='true'
       aria-label={props.label}
       onPaste={handlePaste}
+      onKeyDown={handleKeyDown}
       onBlur={(event) =>
+        !isDeletingRef.current &&
         props.onTextChange?.(sanitizeHTML(event.currentTarget.innerHTML))
       }
     />
@@ -216,7 +295,7 @@ function EditableTimestamp(props: {
       dir='ltr'
       aria-label={props.label}
       inputMode='numeric'
-      className='me-5 shrink-0 w-20 text-left tabular-nums focus:outline-none focus:ring-2 focus:ring-blue-500 rounded border border-dashed border-blue-300 bg-blue-50/60 px-1 py-1 dark:border-blue-400/50 dark:bg-blue-950/30'
+      className='me-5 self-stretch shrink-0 w-20 text-center tabular-nums focus:outline-none focus:ring-2 focus:ring-blue-500 rounded border border-dashed border-blue-300 bg-blue-50/60 px-1 py-1 dark:border-blue-400/50 dark:bg-blue-950/30'
       value={value}
       onChange={(e) => setValue(e.target.value)}
       onBlur={handleBlur}
@@ -265,73 +344,6 @@ function TimestampButton({
   );
 }
 
-function SegmentActionButton(props: {
-  label: string;
-  onClick: () => void;
-  disabled?: boolean;
-  children: ReactNode;
-}) {
-  const [isTooltipOpen, setIsTooltipOpen] = useState(false);
-  const arrowRef = useRef<SVGSVGElement>(null);
-  const { refs, floatingStyles, context } = useFloating({
-    open: isTooltipOpen,
-    onOpenChange: setIsTooltipOpen,
-    placement: "top",
-    middleware: [
-      offset(8),
-      flip(),
-      shift({ padding: 8 }),
-      // Floating UI reads this ref after render to calculate arrow placement.
-      // eslint-disable-next-line react-hooks/refs
-      arrow({ element: arrowRef }),
-    ],
-    whileElementsMounted: autoUpdate,
-  });
-  const hover = useHover(context, { move: false, delay: { open: 500 } });
-  const focus = useFocus(context);
-  const { getReferenceProps, getFloatingProps } = useInteractions([
-    hover,
-    focus,
-  ]);
-
-  return (
-    <>
-      <button
-        ref={refs.setReference}
-        type='button'
-        className='segment-action-button'
-        onClick={() => {
-          if (!props.disabled) props.onClick();
-        }}
-        aria-label={props.label}
-        aria-disabled={props.disabled || undefined}
-        {...getReferenceProps()}
-      >
-        {props.children}
-      </button>
-      {isTooltipOpen && (
-        <FloatingPortal>
-          <span
-            // Floating UI requires this callback ref to position the tooltip.
-            // eslint-disable-next-line react-hooks/refs
-            ref={refs.setFloating}
-            style={floatingStyles}
-            className='z-20 whitespace-nowrap rounded bg-slate-900 px-2 py-1 text-xs font-medium text-white shadow-lg dark:bg-slate-100 dark:text-slate-900'
-            {...getFloatingProps({ role: "tooltip" })}
-          >
-            <FloatingArrow
-              ref={arrowRef}
-              context={context}
-              className='fill-slate-900 dark:fill-slate-100'
-            />
-            {props.label}
-          </span>
-        </FloatingPortal>
-      )}
-    </>
-  );
-}
-
 interface TranscriptSegmentProps {
   chunk: TranscriptChunk;
   index: number;
@@ -344,9 +356,15 @@ interface TranscriptSegmentProps {
     index: number,
     updatedChunk: TranscriptChunk,
   ) => void;
-  onAddSegment?: (index: number) => void;
+  onSplitSegment?: (
+    index: number,
+    before: string,
+    after: string,
+    beforeWordCount: number,
+  ) => void;
   onDeleteSegment?: (index: number) => void;
-  canDelete: boolean;
+  shouldFocusEditor: boolean;
+  focusEditorAtEnd: boolean;
   onSeekTo?: (time: number) => void;
   onKeyDown: (
     event: React.KeyboardEvent<HTMLButtonElement>,
@@ -366,9 +384,10 @@ const TranscriptSegment = memo(function TranscriptSegment({
   lang,
   dir,
   onChunkUpdate,
-  onAddSegment,
+  onSplitSegment,
   onDeleteSegment,
-  canDelete,
+  shouldFocusEditor,
+  focusEditorAtEnd,
   onSeekTo,
   onKeyDown,
   onButtonMount,
@@ -390,7 +409,7 @@ const TranscriptSegment = memo(function TranscriptSegment({
   return (
     <div
       ref={(el) => onContainerMount(el, index)}
-      className={`transcript-segment group ${isActive ? "active-segment" : ""}`}
+      className={`transcript-segment ${isActive ? "active-segment" : ""}`}
       aria-current={isActive ? "true" : undefined}
     >
       {isEditing && hasLongLine && (
@@ -414,7 +433,9 @@ const TranscriptSegment = memo(function TranscriptSegment({
           <span>One or more lines are over {MAX_LINE_CHARACTERS} characters, which can cut off words or block the video. To fix this, insert a line break at a natural grammatical pause or split the dialogue into two separate captions.</span>
         </div>
       )}
-      <div className='flex w-full min-w-0 items-start'>
+      <div
+        className={`flex w-full min-w-0 ${isEditing ? "items-stretch" : "items-start"}`}
+      >
         {isEditing ? (
           <>
             <EditableTimestamp
@@ -435,26 +456,13 @@ const TranscriptSegment = memo(function TranscriptSegment({
               onTextChange={(text) =>
                 onChunkUpdate?.(index, { ...chunk, text })
               }
+              onSplit={(before, after, beforeWordCount) =>
+                onSplitSegment?.(index, before, after, beforeWordCount)
+              }
+              onDeleteEmpty={() => onDeleteSegment?.(index)}
+              shouldFocus={shouldFocusEditor}
+              focusAtEnd={focusEditorAtEnd}
             />
-            <div className='segment-actions ms-2 shrink-0' aria-label={`Segment ${index + 1} actions`}>
-              <SegmentActionButton
-                label='Add segment'
-                onClick={() => onAddSegment?.(index)}
-              >
-                <svg aria-hidden='true' viewBox='0 0 24 24' fill='none' stroke='currentColor' strokeWidth='2' strokeLinecap='round'>
-                  <path d='M12 5v14M5 12h14' />
-                </svg>
-              </SegmentActionButton>
-              <SegmentActionButton
-                label='Delete segment'
-                onClick={() => onDeleteSegment?.(index)}
-                disabled={!canDelete}
-              >
-                <svg aria-hidden='true' viewBox='0 0 24 24' fill='none' stroke='currentColor' strokeWidth='2' strokeLinecap='round' strokeLinejoin='round'>
-                  <path d='M3 6h18M8 6V4h8v2M19 6l-1 14H6L5 6M10 10v6M14 10v6' />
-                </svg>
-              </SegmentActionButton>
-            </div>
           </>
         ) : (
           <>
@@ -731,7 +739,7 @@ const Transcript = memo(function Transcript({
   chunks: editedChunks,
   language,
   onChunkUpdate,
-  onAddSegment,
+  onSplitSegment,
   onDeleteSegment,
   onSeekTo,
   isEditing,
@@ -1033,6 +1041,26 @@ saveBlob(blob, "transcript.json");
   const [lastAnnouncedProgress, setLastAnnouncedProgress] = useState<
     number | null
   >(null);
+  const [editorFocus, setEditorFocus] = useState<{
+    index: number;
+    atEnd: boolean;
+  } | null>(null);
+
+  const handleSplitSegment = useCallback(
+    (index: number, before: string, after: string, beforeWordCount: number) => {
+      onSplitSegment?.(index, before, after, beforeWordCount);
+      setEditorFocus({ index: index + 1, atEnd: false });
+    },
+    [onSplitSegment],
+  );
+
+  const handleDeleteSegment = useCallback(
+    (index: number) => {
+      onDeleteSegment?.(index);
+      setEditorFocus({ index: Math.max(0, index - 1), atEnd: true });
+    },
+    [onDeleteSegment],
+  );
 
   useEffect(() => {
     if (scrollRafRef.current) {
@@ -1389,7 +1417,7 @@ saveBlob(blob, "transcript.json");
             >
               {chunks.map((chunk, i) => (
                 <TranscriptSegment
-                  key={`segment-${i}`}
+                  key={`segment-${chunk.timestamp[0]}-${chunk.timestamp[1]}-${chunk.text}`}
                   chunk={chunk}
                   index={i}
                   isActive={i === activeIndex}
@@ -1398,9 +1426,10 @@ saveBlob(blob, "transcript.json");
                   lang={transcriptLanguage}
                   dir={transcriptDir}
                   onChunkUpdate={onChunkUpdate}
-                  onAddSegment={onAddSegment}
-                  onDeleteSegment={onDeleteSegment}
-                  canDelete={chunks.length > 1}
+                  onSplitSegment={handleSplitSegment}
+                  onDeleteSegment={handleDeleteSegment}
+                  shouldFocusEditor={editorFocus?.index === i}
+                  focusEditorAtEnd={editorFocus?.index === i && editorFocus.atEnd}
                   onSeekTo={handleSeek}
                   onKeyDown={handleKeyDown}
                   onButtonMount={handleButtonRef}
