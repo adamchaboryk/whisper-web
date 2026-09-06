@@ -32,10 +32,18 @@ import {
 } from "../utils/AudioUtils";
 import {
   MAX_LINE_CHARACTERS,
+  extractPlainText,
+  escapeHtmlText,
   sanitizeHTML,
 } from "../utils/SubtitleUtils";
+import {
+  findMatches,
+  replaceAllMatches,
+  replaceMatchesInChunk,
+} from "../utils/FindReplaceUtils";
 import { resolveLanguageAndDirection } from "../utils/LanguageUtils";
 import { Spinner } from "./TranscribeButton";
+import FindReplacePanel from "./FindReplacePanel";
 
 interface Props {
   transcribedData: TranscriberData | undefined;
@@ -66,6 +74,7 @@ interface Props {
   setIsAutoScrollSettingEnabled?: (enabled: boolean) => void;
   playbackRate?: number;
   onPlaybackRateChange?: (rate: number) => void;
+  onChunksReplace?: (chunks: TranscriptChunk[]) => void;
 }
 
 function formatTranscriptionDuration(seconds: number): string {
@@ -134,6 +143,22 @@ function FilmIcon(props: { className?: string }) {
   );
 }
 
+function buildHighlightedHtml(
+  plainText: string,
+  ranges: { start: number; end: number; isActive: boolean }[],
+): string {
+  const sorted = [...ranges].sort((a, b) => a.start - b.start);
+  let html = "";
+  let cursor = 0;
+  for (const range of sorted) {
+    html += escapeHtmlText(plainText.slice(cursor, range.start));
+    html += `<mark class="find-match${range.isActive ? " find-match-active" : ""}">${escapeHtmlText(plainText.slice(range.start, range.end))}</mark>`;
+    cursor = range.end;
+  }
+  html += escapeHtmlText(plainText.slice(cursor));
+  return html;
+}
+
 function EditableChunk(props: {
   text: string;
   label: string;
@@ -144,6 +169,7 @@ function EditableChunk(props: {
   onDeleteEmpty?: () => void;
   shouldFocus?: boolean;
   focusAtEnd?: boolean;
+  highlightRanges?: { start: number; end: number; isActive: boolean }[];
 }) {
   const editorRef = useRef<HTMLDivElement>(null);
   const isDeletingRef = useRef(false);
@@ -151,12 +177,14 @@ function EditableChunk(props: {
   useLayoutEffect(() => {
     const editor = editorRef.current;
     if (editor && document.activeElement !== editor) {
-      const sanitized = sanitizeHTML(props.text);
-      if (editor.innerHTML !== sanitized) {
-        editor.innerHTML = sanitized;
+      const html = props.highlightRanges?.length
+        ? buildHighlightedHtml(extractPlainText(props.text), props.highlightRanges)
+        : sanitizeHTML(props.text);
+      if (editor.innerHTML !== html) {
+        editor.innerHTML = html;
       }
     }
-  }, [props.text]);
+  }, [props.text, props.highlightRanges]);
 
   useEffect(() => {
     if (props.shouldFocus) {
@@ -373,6 +401,7 @@ interface TranscriptSegmentProps {
   onButtonMount: (element: HTMLButtonElement | null, index: number) => void;
   onContainerMount: (element: HTMLDivElement | null, index: number) => void;
   onTimestampHover?: (element: HTMLElement | null) => void;
+  highlightRanges?: { start: number; end: number; isActive: boolean }[];
 }
 
 const TranscriptSegment = memo(function TranscriptSegment({
@@ -393,6 +422,7 @@ const TranscriptSegment = memo(function TranscriptSegment({
   onButtonMount,
   onContainerMount,
   onTimestampHover,
+  highlightRanges,
 }: TranscriptSegmentProps) {
   const sanitizedText = useMemo(
     () => sanitizeHTML(chunk.text).trimStart(),
@@ -462,6 +492,7 @@ const TranscriptSegment = memo(function TranscriptSegment({
               onDeleteEmpty={() => onDeleteSegment?.(index)}
               shouldFocus={shouldFocusEditor}
               focusAtEnd={focusEditorAtEnd}
+              highlightRanges={highlightRanges}
             />
           </>
         ) : (
@@ -697,11 +728,6 @@ function PlaybackSpeedSelect(props: {
   );
 }
 
-const extractPlainText = (html: string) => {
-  const doc = new DOMParser().parseFromString(html, "text/html");
-  return doc.body.textContent || "";
-};
-
 const decodeSrtText = (html: string) => {
   const sanitized = sanitizeHTML(html);
   const tmp = document.createElement("textarea");
@@ -755,6 +781,7 @@ const Transcript = memo(function Transcript({
   setIsAutoScrollSettingEnabled,
   playbackRate = 1,
   onPlaybackRateChange,
+  onChunksReplace,
 }: Props) {
   const divRef = useRef<HTMLDivElement>(null);
   const timestampRefs = useRef<(HTMLButtonElement | null)[]>([]);
@@ -765,11 +792,136 @@ const Transcript = memo(function Transcript({
   const prevTimeRef = useRef<number | undefined>(undefined);
   const autoScrollResumeTimerRef = useRef<number | null>(null);
   const programmaticScrollRef = useRef(false);
+  const [findButtonEl, setFindButtonEl] = useState<HTMLButtonElement | null>(
+    null,
+  );
+  const [isFindTooltipOpen, setIsFindTooltipOpen] = useState(false);
+  const findArrowRef = useRef<SVGSVGElement>(null);
+  const {
+    refs: findTooltipRefs,
+    floatingStyles: findTooltipFloatingStyles,
+    context: findTooltipContext,
+  } = useFloating({
+    open: isFindTooltipOpen,
+    onOpenChange: setIsFindTooltipOpen,
+    placement: "top",
+    middleware: [
+      offset(10),
+      flip(),
+      shift({ padding: 8 }),
+      // eslint-disable-next-line react-hooks/refs
+      arrow({ element: findArrowRef }),
+    ],
+    whileElementsMounted: autoUpdate,
+  });
+  const findTooltipHover = useHover(findTooltipContext, {
+    move: false,
+    delay: { open: 800, close: 0 },
+  });
+  const findTooltipFocus = useFocus(findTooltipContext);
+  const {
+    getReferenceProps: getFindTooltipReferenceProps,
+    getFloatingProps: getFindTooltipFloatingProps,
+  } = useInteractions([findTooltipHover, findTooltipFocus]);
+
+  const [findReplaceOpen, setFindReplaceOpen] = useState(false);
+  const [findReplaceMode, setFindReplaceMode] = useState<"find" | "replace">(
+    "find",
+  );
+  const [findQuery, setFindQuery] = useState("");
+  const [replaceValue, setReplaceValue] = useState("");
+  const [matchCase, setMatchCase] = useState(false);
+  const [wholeWord, setWholeWord] = useState(false);
+  const [activeMatchIndex, setActiveMatchIndex] = useState(0);
 
   const chunks = useMemo(
     () => editedChunks ?? transcribedData?.chunks ?? [],
     [editedChunks, transcribedData?.chunks],
   );
+
+  const findMatchOptions = useMemo(
+    () => ({ matchCase, wholeWord }),
+    [matchCase, wholeWord],
+  );
+  const matches = useMemo(
+    () =>
+      isEditing && findReplaceOpen
+        ? findMatches(chunks, findQuery, findMatchOptions)
+        : [],
+    [isEditing, findReplaceOpen, chunks, findQuery, findMatchOptions],
+  );
+  const clampedActiveMatchIndex = matches.length
+    ? Math.min(activeMatchIndex, matches.length - 1)
+    : 0;
+
+  const highlightRangesByChunk = useMemo(() => {
+    const map = new Map<
+      number,
+      { start: number; end: number; isActive: boolean }[]
+    >();
+    matches.forEach((match, i) => {
+      const ranges = map.get(match.chunkIndex) ?? [];
+      ranges.push({
+        start: match.start,
+        end: match.end,
+        isActive: i === clampedActiveMatchIndex,
+      });
+      map.set(match.chunkIndex, ranges);
+    });
+    return map;
+  }, [matches, clampedActiveMatchIndex]);
+
+  const scrollChunkIntoViewForFind = useCallback((index: number) => {
+    chunkRefs.current[index]?.scrollIntoView({
+      behavior: "smooth",
+      block: "center",
+    });
+  }, []);
+
+  useEffect(() => {
+    const match = matches[clampedActiveMatchIndex];
+    if (match) {
+      scrollChunkIntoViewForFind(match.chunkIndex);
+    }
+  }, [matches, clampedActiveMatchIndex, scrollChunkIntoViewForFind]);
+
+  const handleFindNext = useCallback(() => {
+    if (!matches.length) return;
+    setActiveMatchIndex((clampedActiveMatchIndex + 1) % matches.length);
+  }, [matches.length, clampedActiveMatchIndex]);
+
+  const handleFindPrevious = useCallback(() => {
+    if (!matches.length) return;
+    setActiveMatchIndex(
+      (clampedActiveMatchIndex - 1 + matches.length) % matches.length,
+    );
+  }, [matches.length, clampedActiveMatchIndex]);
+
+  const handleReplaceCurrent = useCallback(() => {
+    const match = matches[clampedActiveMatchIndex];
+    if (!match) return;
+    const updatedChunk = replaceMatchesInChunk(
+      chunks[match.chunkIndex],
+      [match],
+      replaceValue,
+    );
+    onChunkUpdate?.(match.chunkIndex, updatedChunk);
+  }, [matches, clampedActiveMatchIndex, chunks, replaceValue, onChunkUpdate]);
+
+  const handleReplaceAll = useCallback(() => {
+    if (!matches.length) return;
+    const updatedChunks = replaceAllMatches(chunks, matches, replaceValue);
+    onChunksReplace?.(updatedChunks);
+  }, [matches, chunks, replaceValue, onChunksReplace]);
+
+  const openFindReplace = useCallback((mode: "find" | "replace") => {
+    setFindReplaceMode(mode);
+    setFindReplaceOpen(true);
+  }, []);
+
+  const closeFindReplace = useCallback(() => {
+    setFindReplaceOpen(false);
+  }, []);
 
   const [internalActiveIndex, setInternalActiveIndex] = useState<number>(() =>
     findActiveChunkIndex(chunks, currentTime),
@@ -828,6 +980,9 @@ const Transcript = memo(function Transcript({
   const editShortcut = /Mac|iPhone|iPad|iPod/.test(navigator.userAgent)
     ? "Command + E"
     : "Ctrl + E";
+  const findShortcut = /Mac|iPhone|iPad|iPod/.test(navigator.userAgent)
+    ? "Command + F"
+    : "Ctrl + F";
 
   const [tooltipTarget, setTooltipTarget] = useState<HTMLElement | null>(
     null,
@@ -1279,11 +1434,33 @@ saveBlob(blob, "transcript.json");
         isEditing &&
         (event.metaKey || event.ctrlKey) &&
         !event.altKey &&
+        event.key.toLowerCase() === "f"
+      ) {
+        event.preventDefault();
+        event.stopPropagation();
+        openFindReplace("find");
+      } else if (
+        isEditing &&
+        (event.metaKey || event.ctrlKey) &&
+        !event.altKey &&
+        event.key.toLowerCase() === "h"
+      ) {
+        event.preventDefault();
+        event.stopPropagation();
+        openFindReplace("replace");
+      } else if (
+        isEditing &&
+        (event.metaKey || event.ctrlKey) &&
+        !event.altKey &&
         event.key.toLowerCase() === "s"
       ) {
         event.preventDefault();
         event.stopPropagation();
         onSaveEdits?.();
+      } else if (isEditing && findReplaceOpen && event.key === "Escape") {
+        event.preventDefault();
+        event.stopPropagation();
+        closeFindReplace();
       } else if (isEditing && event.key === "Escape") {
         event.preventDefault();
         event.stopPropagation();
@@ -1306,7 +1483,16 @@ saveBlob(blob, "transcript.json");
     return () => {
       window.removeEventListener("keydown", handleGlobalKeyDown);
     };
-  }, [isEditing, onSaveEdits, onCancelEdits, handleStartEditing, transcribedData]);
+  }, [
+    isEditing,
+    findReplaceOpen,
+    openFindReplace,
+    closeFindReplace,
+    onSaveEdits,
+    onCancelEdits,
+    handleStartEditing,
+    transcribedData,
+  ]);
 
   return (
     <div ref={divRef} className='w-full flex flex-col p-4 overflow-y-auto'>
@@ -1332,6 +1518,53 @@ saveBlob(blob, "transcript.json");
                   playbackRate={playbackRate}
                   onPlaybackRateChange={onPlaybackRateChange}
                 />
+              )}
+              {isEditing && (
+                <button
+                  ref={(el) => {
+                    findTooltipRefs.setReference(el);
+                    setFindButtonEl(el);
+                  }}
+                  type='button'
+                  className='export-button gap-1.5'
+                  onClick={() =>
+                    findReplaceOpen
+                      ? closeFindReplace()
+                      : openFindReplace("find")
+                  }
+                  aria-keyshortcuts='Meta+F Control+F'
+                  aria-expanded={findReplaceOpen}
+                  {...getFindTooltipReferenceProps()}
+                >
+                  <svg
+                    aria-hidden='true'
+                    viewBox='0 0 20 20'
+                    fill='currentColor'
+                    className='h-4 w-4'
+                  >
+                    <path
+                      fillRule='evenodd'
+                      d='M9 3.5a5.5 5.5 0 1 0 0 11 5.5 5.5 0 0 0 0-11ZM2 9a7 7 0 1 1 12.6 4.2l3.1 3.1a.75.75 0 1 1-1.06 1.06l-3.1-3.1A7 7 0 0 1 2 9Z'
+                      clipRule='evenodd'
+                    />
+                  </svg>
+                  Find
+                </button>
+              )}
+              {isFindTooltipOpen && (
+                <span
+                  ref={findTooltipRefs.setFloating}
+                  style={findTooltipFloatingStyles}
+                  className='z-20 whitespace-nowrap rounded bg-slate-900 px-2 py-1 text-xs font-medium text-white shadow-lg dark:bg-slate-100 dark:text-slate-900'
+                  {...getFindTooltipFloatingProps({ role: "tooltip" })}
+                >
+                  <FloatingArrow
+                    ref={findArrowRef}
+                    context={findTooltipContext}
+                    className='fill-slate-900 dark:fill-slate-100'
+                  />
+                  {findShortcut}
+                </span>
               )}
             </div>
             <div className='flex items-center gap-3'>
@@ -1379,10 +1612,32 @@ saveBlob(blob, "transcript.json");
               }}
               onMouseLeave={resumeAutoScrollOnPointerLeave}
               onKeyDown={(event) => {
-                if (isEditing && event.key === "Escape") {
+                if (isEditing && findReplaceOpen && event.key === "Escape") {
+                  event.preventDefault();
+                  event.stopPropagation();
+                  closeFindReplace();
+                } else if (isEditing && event.key === "Escape") {
                   event.preventDefault();
                   event.stopPropagation();
                   onCancelEdits?.();
+                } else if (
+                  isEditing &&
+                  (event.metaKey || event.ctrlKey) &&
+                  !event.altKey &&
+                  event.key.toLowerCase() === "f"
+                ) {
+                  event.preventDefault();
+                  event.stopPropagation();
+                  openFindReplace("find");
+                } else if (
+                  isEditing &&
+                  (event.metaKey || event.ctrlKey) &&
+                  !event.altKey &&
+                  event.key.toLowerCase() === "h"
+                ) {
+                  event.preventDefault();
+                  event.stopPropagation();
+                  openFindReplace("replace");
                 } else if (
                   isEditing &&
                   (event.metaKey || event.ctrlKey) &&
@@ -1435,6 +1690,7 @@ saveBlob(blob, "transcript.json");
                   onButtonMount={handleButtonRef}
                   onContainerMount={handleContainerRef}
                   onTimestampHover={setTooltipTarget}
+                  highlightRanges={highlightRangesByChunk.get(i)}
                 />
               ))}
             </div>
@@ -1464,6 +1720,28 @@ saveBlob(blob, "transcript.json");
               </FloatingPortal>
             )
           }
+
+          <FindReplacePanel
+            open={findReplaceOpen && Boolean(isEditing)}
+            mode={findReplaceMode}
+            onModeChange={setFindReplaceMode}
+            onClose={closeFindReplace}
+            referenceElement={findButtonEl}
+            query={findQuery}
+            onQueryChange={setFindQuery}
+            replaceValue={replaceValue}
+            onReplaceValueChange={setReplaceValue}
+            matchCase={matchCase}
+            onMatchCaseChange={setMatchCase}
+            wholeWord={wholeWord}
+            onWholeWordChange={setWholeWord}
+            matchCount={matches.length}
+            activeMatchNumber={matches.length ? clampedActiveMatchIndex + 1 : 0}
+            onFindNext={handleFindNext}
+            onFindPrevious={handleFindPrevious}
+            onReplace={handleReplaceCurrent}
+            onReplaceAll={handleReplaceAll}
+          />
 
           <div className='w-full flex justify-end mb-5 pr-2'>
             <label

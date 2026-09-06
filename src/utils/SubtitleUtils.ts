@@ -208,6 +208,28 @@ export function parseSubtitleFile(text: string, type: "srt" | "vtt") {
   return { chunks, text: fullText };
 }
 
+let sharedTextParser: DOMParser | null = null;
+
+/** Extracts the plain-text content of an HTML fragment, stripping all tags. */
+export function extractPlainText(html: string): string {
+  if (!html.includes("<") && !html.includes("&")) {
+    return html;
+  }
+  if (sharedTextParser === null && typeof DOMParser !== "undefined") {
+    sharedTextParser = new DOMParser();
+  }
+  if (!sharedTextParser) {
+    return html;
+  }
+  const doc = sharedTextParser.parseFromString(html, "text/html");
+  return doc.body.textContent || "";
+}
+
+/** Escapes text for safe insertion into an HTML string as a text node. */
+export function escapeHtmlText(str: string): string {
+  return str.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+}
+
 export const MAX_LINE_CHARACTERS = 42;
 const MAX_LINES_PER_EVENT = 2;
 const MIN_SUBTITLE_DURATION = 1.0; // Minimum On-Screen Duration: 1.0 second

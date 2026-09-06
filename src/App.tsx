@@ -19,6 +19,9 @@ function App() {
     chunks: TranscriberData["chunks"];
   }>();
   const draftTranscriptRef = useRef(draftTranscript);
+  const undoStackRef = useRef<TranscriptChunk[][]>([]);
+  const redoStackRef = useRef<TranscriptChunk[][]>([]);
+  const MAX_HISTORY = 100;
   const timeSubscribersRef = useRef<Set<(time: number) => void>>(new Set());
   const handleTimeUpdate = useCallback((time: number) => {
     for (const subscriber of timeSubscribersRef.current) {
@@ -77,47 +80,83 @@ function App() {
     const draft = { source: output, chunks: savedChunks ?? output.chunks };
     draftTranscriptRef.current = draft;
     setDraftTranscript(draft);
+    undoStackRef.current = [];
+    redoStackRef.current = [];
   }, [transcriber.output, savedChunks]);
 
-  const handleChunkUpdate = useCallback(
-    (
-      index: number,
-      updatedChunk: TranscriptChunk,
-    ) => {
-      const output = transcriber.output;
-      if (!output || output.isBusy) {
-        return;
-      }
-
-      const currentDraft = draftTranscriptRef.current;
-      const chunks =
-        currentDraft?.source === output ? currentDraft.chunks : output.chunks;
-      const next = {
-        source: output,
-        chunks: chunks.map((chunk, chunkIndex) =>
-          chunkIndex === index ? updatedChunk : chunk,
-        ),
-      };
-      draftTranscriptRef.current = next;
-      setDraftTranscript(next);
-    },
-    [transcriber.output],
-  );
-
   const updateDraftChunks = useCallback(
-    (update: (chunks: TranscriptChunk[]) => TranscriptChunk[]) => {
+    (
+      update: (chunks: TranscriptChunk[]) => TranscriptChunk[],
+      options?: { recordHistory?: boolean },
+    ) => {
       const output = transcriber.output;
       if (!output || output.isBusy) return;
 
       const currentDraft = draftTranscriptRef.current;
       const chunks =
         currentDraft?.source === output ? currentDraft.chunks : output.chunks;
-      const next = { source: output, chunks: update(chunks) };
+      const nextChunks = update(chunks);
+
+      if (options?.recordHistory !== false) {
+        undoStackRef.current.push(chunks);
+        if (undoStackRef.current.length > MAX_HISTORY) {
+          undoStackRef.current.shift();
+        }
+        redoStackRef.current = [];
+      }
+
+      const next = { source: output, chunks: nextChunks };
       draftTranscriptRef.current = next;
       setDraftTranscript(next);
     },
     [transcriber.output],
   );
+
+  const handleChunkUpdate = useCallback(
+    (index: number, updatedChunk: TranscriptChunk) => {
+      updateDraftChunks((chunks) =>
+        chunks.map((chunk, chunkIndex) =>
+          chunkIndex === index ? updatedChunk : chunk,
+        ),
+      );
+    },
+    [updateDraftChunks],
+  );
+
+  const handleChunksReplace = useCallback(
+    (updatedChunks: TranscriptChunk[]) => {
+      updateDraftChunks(() => updatedChunks);
+    },
+    [updateDraftChunks],
+  );
+
+  const undo = useCallback(() => {
+    const output = transcriber.output;
+    const currentDraft = draftTranscriptRef.current;
+    if (!output || !currentDraft || currentDraft.source !== output) return;
+
+    const previous = undoStackRef.current.pop();
+    if (!previous) return;
+
+    redoStackRef.current.push(currentDraft.chunks);
+    const next = { source: output, chunks: previous };
+    draftTranscriptRef.current = next;
+    setDraftTranscript(next);
+  }, [transcriber.output]);
+
+  const redo = useCallback(() => {
+    const output = transcriber.output;
+    const currentDraft = draftTranscriptRef.current;
+    if (!output || !currentDraft || currentDraft.source !== output) return;
+
+    const next = redoStackRef.current.pop();
+    if (!next) return;
+
+    undoStackRef.current.push(currentDraft.chunks);
+    const nextDraft = { source: output, chunks: next };
+    draftTranscriptRef.current = nextDraft;
+    setDraftTranscript(nextDraft);
+  }, [transcriber.output]);
 
   const handleSplitSegment = useCallback(
     (
@@ -186,11 +225,15 @@ function App() {
     }
     draftTranscriptRef.current = undefined;
     setDraftTranscript(undefined);
+    undoStackRef.current = [];
+    redoStackRef.current = [];
   }, [transcriber.output]);
 
   const cancelEdits = useCallback(() => {
     draftTranscriptRef.current = undefined;
     setDraftTranscript(undefined);
+    undoStackRef.current = [];
+    redoStackRef.current = [];
   }, []);
 
   const handleSeekReady = useCallback((seekTo: (time: number) => void) => {
@@ -211,6 +254,36 @@ function App() {
       transcriber.summarize(text);
     }
   }, [savedChunks, transcriber]);
+
+  const isEditingDraft = Boolean(draftChunks);
+
+  useEffect(() => {
+    const handleUndoRedoKeyDown = (event: KeyboardEvent) => {
+      if (!isEditingDraft || !(event.metaKey || event.ctrlKey)) return;
+
+      // Let native contentEditable undo/redo handle typing history;
+      // only intercept the global stack when focus is outside an editor.
+      const activeElement = document.activeElement;
+      if (activeElement?.closest('[contenteditable="true"]')) return;
+
+      if (event.key.toLowerCase() === "z") {
+        event.preventDefault();
+        if (event.shiftKey) {
+          redo();
+        } else {
+          undo();
+        }
+      } else if (event.key.toLowerCase() === "y") {
+        event.preventDefault();
+        redo();
+      }
+    };
+
+    window.addEventListener("keydown", handleUndoRedoKeyDown);
+    return () => {
+      window.removeEventListener("keydown", handleUndoRedoKeyDown);
+    };
+  }, [isEditingDraft, undo, redo]);
 
   return (
     <div className='app-layout'>
@@ -245,6 +318,7 @@ function App() {
             onChunkUpdate={handleChunkUpdate}
             onSplitSegment={handleSplitSegment}
             onDeleteSegment={handleDeleteSegment}
+            onChunksReplace={handleChunksReplace}
             onSeekTo={handleSeekTo}
             isEditing={Boolean(draftChunks)}
             onStartEditing={startEditing}
