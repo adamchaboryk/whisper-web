@@ -512,6 +512,7 @@ export const AudioManager = React.memo(function AudioManager(props: {
 
   const setAudioFromRecording = async (data: Blob) => {
     resetAudio();
+    props.transcriber.onInputChange();
     const blobUrl = URL.createObjectURL(data);
     try {
       const decoded = await decodeAudioBuffer(data, data.type);

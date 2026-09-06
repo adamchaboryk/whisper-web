@@ -657,6 +657,66 @@ function EditButton(props: { onEdit?: () => void; shortcut: string }) {
   );
 }
 
+function CancelButton(props: { onCancel?: () => void; shortcut: string }) {
+  const [isTooltipOpen, setIsTooltipOpen] = useState(false);
+  const arrowRef = useRef<SVGSVGElement>(null);
+  const { refs, floatingStyles, context } = useFloating({
+    open: isTooltipOpen,
+    onOpenChange: setIsTooltipOpen,
+    placement: "top",
+    middleware: [
+      offset(10),
+      flip(),
+      shift({ padding: 8 }),
+      // Floating UI reads this ref after render to calculate arrow placement.
+      // eslint-disable-next-line react-hooks/refs
+      arrow({ element: arrowRef }),
+    ],
+    whileElementsMounted: autoUpdate,
+  });
+  const hover = useHover(context, {
+    move: false,
+    delay: { open: 800, close: 0 },
+  });
+  const focus = useFocus(context);
+  const { getReferenceProps, getFloatingProps } = useInteractions([
+    hover,
+    focus,
+  ]);
+
+  return (
+    <>
+      <button
+        ref={refs.setReference}
+        type='button'
+        className='inline-flex items-center justify-center gap-2 rounded-md border-2 border-solid bg-red-100 px-4 py-2 text-sm font-semibold text-red-900 hover:bg-red-200 focus:outline-none focus-visible:ring-2 focus-visible:ring-red-500 focus-visible:ring-offset-2 transition-all duration-300'
+        onClick={props.onCancel}
+        aria-keyshortcuts='Escape'
+        {...getReferenceProps()}
+      >
+        Cancel
+      </button>
+      {isTooltipOpen && (
+        <span
+          // Floating UI requires this callback ref to position the tooltip.
+          // eslint-disable-next-line react-hooks/refs
+          ref={refs.setFloating}
+          style={floatingStyles}
+          className='z-20 whitespace-nowrap rounded bg-slate-900 px-2 py-1 text-xs font-medium text-white shadow-lg dark:bg-slate-100 dark:text-slate-900'
+          {...getFloatingProps({ role: "tooltip" })}
+        >
+          <FloatingArrow
+            ref={arrowRef}
+            context={context}
+            className='fill-slate-900 dark:fill-slate-100'
+          />
+          {props.shortcut}
+        </span>
+      )}
+    </>
+  );
+}
+
 function PlaybackSpeedSelect(props: {
   playbackRate: number;
   onPlaybackRateChange: (rate: number) => void;
@@ -980,6 +1040,7 @@ const Transcript = memo(function Transcript({
   const editShortcut = /Mac|iPhone|iPad|iPod/.test(navigator.userAgent)
     ? "Command + E"
     : "Ctrl + E";
+  const cancelShortcut = "Escape";
   const findShortcut = /Mac|iPhone|iPad|iPod/.test(navigator.userAgent)
     ? "Command + F"
     : "Ctrl + F";
@@ -1574,13 +1635,10 @@ saveBlob(blob, "transcript.json");
                     onSave={onSaveEdits}
                     shortcut={saveShortcut}
                   />
-                  <button
-                    type='button'
-                    className='inline-flex items-center justify-center gap-2 rounded-md border-2 border-solid bg-red-100 px-4 py-2 text-sm font-semibold text-red-900 hover:bg-red-200 focus:outline-none focus-visible:ring-2 focus-visible:ring-red-500 focus-visible:ring-offset-2 transition-all duration-300'
-                    onClick={onCancelEdits}
-                  >
-                    Cancel
-                  </button>
+                  <CancelButton
+                    onCancel={onCancelEdits}
+                    shortcut={cancelShortcut}
+                  />
                 </>
               ) : (
                 <EditButton
