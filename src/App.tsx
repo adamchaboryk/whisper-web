@@ -1,7 +1,11 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { ApplicationControls, AudioManager } from "./components/AudioManager";
 import Transcript from "./components/Transcript";
-import { TranscriberData, useTranscriber } from "./hooks/useTranscriber";
+import {
+  TranscriptChunk,
+  TranscriberData,
+  useTranscriber,
+} from "./hooks/useTranscriber";
 
 function App() {
   const transcriber = useTranscriber();
@@ -78,7 +82,7 @@ function App() {
   const handleChunkUpdate = useCallback(
     (
       index: number,
-      updatedChunk: { text: string; timestamp: [number, number | null] },
+      updatedChunk: TranscriptChunk,
     ) => {
       const output = transcriber.output;
       if (!output || output.isBusy) {
@@ -98,6 +102,47 @@ function App() {
       setDraftTranscript(next);
     },
     [transcriber.output],
+  );
+
+  const updateDraftChunks = useCallback(
+    (update: (chunks: TranscriptChunk[]) => TranscriptChunk[]) => {
+      const output = transcriber.output;
+      if (!output || output.isBusy) return;
+
+      const currentDraft = draftTranscriptRef.current;
+      const chunks =
+        currentDraft?.source === output ? currentDraft.chunks : output.chunks;
+      const next = { source: output, chunks: update(chunks) };
+      draftTranscriptRef.current = next;
+      setDraftTranscript(next);
+    },
+    [transcriber.output],
+  );
+
+  const handleAddSegment = useCallback(
+    (index: number) => {
+      updateDraftChunks((chunks) => {
+        const current = chunks[index];
+        const next = chunks[index + 1];
+        const start = current.timestamp[1] ?? current.timestamp[0] + 1;
+        const nextStart = next?.timestamp[0];
+        const end = nextStart && nextStart > start ? nextStart : start + 1;
+        const segment: TranscriptChunk = { text: "", timestamp: [start, end] };
+        return [...chunks.slice(0, index + 1), segment, ...chunks.slice(index + 1)];
+      });
+    },
+    [updateDraftChunks],
+  );
+
+  const handleDeleteSegment = useCallback(
+    (index: number) => {
+      updateDraftChunks((chunks) =>
+        chunks.length > 1
+          ? chunks.filter((_, chunkIndex) => chunkIndex !== index)
+          : chunks,
+      );
+    },
+    [updateDraftChunks],
   );
 
   const saveEdits = useCallback(() => {
@@ -167,6 +212,8 @@ function App() {
                 : transcriber.language)
             }
             onChunkUpdate={handleChunkUpdate}
+            onAddSegment={handleAddSegment}
+            onDeleteSegment={handleDeleteSegment}
             onSeekTo={handleSeekTo}
             isEditing={Boolean(draftChunks)}
             onStartEditing={startEditing}

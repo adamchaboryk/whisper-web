@@ -54,7 +54,7 @@ const createCanonicalWav = (audio, sampleRate = 16000) => {
   return new Blob([buffer], { type: "audio/wav" });
 };
 
-const MAX_LINE_CHARACTERS = 42;
+const MAX_LINE_CHARACTERS = 40;
 const MAX_LINES_PER_EVENT = 2;
 const MIN_SUBTITLE_DURATION = 1.0;
 const TECHNICAL_FLOOR_DURATION = 0.2;
@@ -197,7 +197,7 @@ const splitTextIntoPyramidLines = (text) => {
     len1 += (i > 1 ? 1 : 0) + wordLengths[i - 1];
     const len2 = totalLength - len1 - 1;
 
-    // Both lines must be within the 42 CPL maximum limit
+    // Both lines must be within the 40 CPL target.
     if (len1 > MAX_LINE_CHARACTERS) {
       break;
     }
@@ -227,7 +227,9 @@ const splitTextIntoPyramidLines = (text) => {
       score += 70;
     }
 
-    if (CONJUNCTIONS.has(nextWordLower)) score += 45;
+    if (CONJUNCTIONS.has(prevWordLower) || CONJUNCTIONS.has(nextWordLower)) {
+      score -= 45;
+    }
     if (PREPOSITIONS.has(nextWordLower)) score += 25;
 
     if (ARTICLES_AND_DETERMINERS.has(prevWordLower)) score -= 80;
@@ -262,7 +264,7 @@ const toCaptionChunks = (chunks) => {
   if (!chunks.length) return [];
 
   const allWords = [];
-  for (const chunk of chunks) {
+  for (const [sourceIndex, chunk] of chunks.entries()) {
     const chunkText = chunk.text.replace(/^[\s\-—–]+/, "").trim();
     if (!chunkText) continue;
 
@@ -276,16 +278,17 @@ const toCaptionChunks = (chunks) => {
     const totalChars = words.join(" ").length;
 
     let charOffset = 0;
-    for (const word of words) {
-      const wordStart =
+    for (const [wordIndex, word] of words.entries()) {
+      const timedWord = chunk.words?.[wordIndex];
+      const wordStart = timedWord?.timestamp?.[0] ??
         sourceStart +
         (sourceDuration * charOffset) / Math.max(1, totalChars);
       charOffset += word.length;
-      const wordEnd =
+      const wordEnd = timedWord?.timestamp?.[1] ??
         sourceStart +
         (sourceDuration * charOffset) / Math.max(1, totalChars);
       charOffset += 1;
-      allWords.push({ word, start: wordStart, end: wordEnd });
+      allWords.push({ word, start: wordStart, end: wordEnd, sourceIndex });
     }
   }
 
@@ -299,7 +302,15 @@ const toCaptionChunks = (chunks) => {
     const text = currentWords.map((w) => w.word).join(" ");
     const start = currentWords[0].start;
     const end = currentWords[currentWords.length - 1].end;
-    rawEvents.push({ text, start, end });
+    rawEvents.push({
+      text,
+      start,
+      end,
+      words: currentWords.map((word) => ({
+        text: word.word,
+        timestamp: [word.start, word.end],
+      })),
+    });
     currentWords = [];
   };
 
@@ -307,6 +318,12 @@ const toCaptionChunks = (chunks) => {
 
   for (let i = 0; i < allWords.length; i++) {
     const wordObj = allWords[i];
+    if (
+      currentWords.length > 0 &&
+      wordObj.sourceIndex !== currentWords[0].sourceIndex
+    ) {
+      flushEvent();
+    }
     const candidateWords = [...currentWords, wordObj];
     const candidateText = candidateWords.map((w) => w.word).join(" ");
     const candidateLength = candidateText.length;
@@ -338,6 +355,35 @@ const toCaptionChunks = (chunks) => {
   }
   flushEvent();
 
+  for (let i = 0; i < rawEvents.length; i++) {
+    const event = rawEvents[i];
+    const previous = rawEvents[i - 1];
+    const next = rawEvents[i + 1];
+    const mergeWithPrevious =
+      previous &&
+      previous.text.length + 1 + event.text.length <= MAX_EVENT_CHARS &&
+      event.end - previous.start <= MAX_SUBTITLE_DURATION;
+    const mergeWithNext =
+      next &&
+      event.text.length + 1 + next.text.length <= MAX_EVENT_CHARS &&
+      next.end - event.start <= MAX_SUBTITLE_DURATION;
+
+    if (mergeWithPrevious) {
+      previous.text = `${previous.text} ${event.text}`;
+      previous.end = event.end;
+      previous.words.push(...event.words);
+    } else if (mergeWithNext) {
+      next.text = `${event.text} ${next.text}`;
+      next.start = event.start;
+      next.words.unshift(...event.words);
+    } else {
+      continue;
+    }
+
+    rawEvents.splice(i, 1);
+    i--;
+  }
+
   const formattedEvents = [];
   for (const ev of rawEvents) {
     const pyramidText = splitTextIntoPyramidLines(ev.text);
@@ -361,6 +407,7 @@ const toCaptionChunks = (chunks) => {
     formattedEvents.push({
       text: pyramidText,
       timestamp: [ev.start, ev.start + duration],
+      words: ev.words,
     });
   }
 
@@ -441,7 +488,7 @@ const transcribeWithParakeet = async ({ audio, formatForCaptions, signal }) => {
     let currentChunk = null;
     const MAX_CHUNK_DURATION_SECONDS = 30;
     const MAX_PAUSE_SECONDS = 1.5;
-    const MAX_LINE_CHARACTERS = 42;
+    const MAX_LINE_CHARACTERS = 40;
     const MIN_LINE_CHARACTERS = 32;
 
     const getLineLengths = (text) =>
@@ -500,6 +547,7 @@ const transcribeWithParakeet = async ({ audio, formatForCaptions, signal }) => {
         currentChunk = {
           text,
           timestamp: [word.startSeconds, word.endSeconds],
+          words: [{ text, timestamp: [word.startSeconds, word.endSeconds] }],
         };
       } else {
         const nextText = appendWord(currentChunk.text, text);
@@ -508,10 +556,15 @@ const transcribeWithParakeet = async ({ audio, formatForCaptions, signal }) => {
           currentChunk = {
             text,
             timestamp: [word.startSeconds, word.endSeconds],
+            words: [{ text, timestamp: [word.startSeconds, word.endSeconds] }],
           };
         } else {
           currentChunk.text = nextText;
           currentChunk.timestamp[1] = word.endSeconds;
+          currentChunk.words.push({
+            text,
+            timestamp: [word.startSeconds, word.endSeconds],
+          });
         }
       }
 

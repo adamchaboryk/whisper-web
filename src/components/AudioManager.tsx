@@ -843,7 +843,7 @@ export const AudioManager = React.memo(function AudioManager(props: {
           />
 
           {audioData.isSampleVideo && (
-            <p className='text-xs text-slate-500 dark:text-slate-400 text-center -mt-2 mb-2'>
+            <p className='text-xs text-slate-500 dark:text-slate-400 mb-4'>
               (Video source:{" "}
               <a
                 href='https://svs.gsfc.nasa.gov/15089/'
@@ -886,7 +886,7 @@ export const AudioManager = React.memo(function AudioManager(props: {
                   />
                   {audioData.mimeType.startsWith("video/") && (
                     <p className='text-sm text-slate-600 dark:text-slate-300'>
-                      ...or add{" "}
+                      ...or add an{" "}
                       <button
                         type='button'
                         onClick={() => transcriptFileInputRef.current?.click()}

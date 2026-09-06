@@ -1,6 +1,5 @@
 import { useEffect, useMemo, useRef } from "react";
 import { formatSrtTimeRange } from "../utils/AudioUtils";
-import { formatSrtChunks } from "../utils/SubtitleUtils";
 
 export default function AudioPlayer(props: {
   audioUrl: string;
@@ -76,8 +75,7 @@ export default function AudioPlayer(props: {
       return undefined;
     }
 
-    const formattedChunks = formatSrtChunks(props.transcriptChunks);
-    const cues = formattedChunks
+    const cues = props.transcriptChunks
       .map((chunk, index) => {
         const start = chunk.timestamp[0];
         const end = chunk.timestamp[1] ?? start;

@@ -469,9 +469,12 @@ export function splitTextIntoPyramidLines(text: string): string {
       score += 70;
     }
 
-    // 3. Break before conjunctions or relative clauses
-    if (CONJUNCTIONS.has(nextWordLower)) {
-      score += 45;
+    // Keep conjunctions attached to the clause they join.
+    if (
+      CONJUNCTIONS.has(prevWordLower) ||
+      CONJUNCTIONS.has(nextWordLower)
+    ) {
+      score -= 45;
     }
 
     // 4. Break before prepositions
@@ -637,6 +640,33 @@ export function formatSrtChunks(
     }
   }
   flushEvent();
+
+  for (let i = 0; i < rawEvents.length; i++) {
+    const event = rawEvents[i];
+    const previous = rawEvents[i - 1];
+    const next = rawEvents[i + 1];
+    const mergeWithPrevious =
+      previous &&
+      getVisibleLength(`${previous.text} ${event.text}`) <= MAX_EVENT_CHARS &&
+      event.end - previous.start <= MAX_SUBTITLE_DURATION;
+    const mergeWithNext =
+      next &&
+      getVisibleLength(`${event.text} ${next.text}`) <= MAX_EVENT_CHARS &&
+      next.end - event.start <= MAX_SUBTITLE_DURATION;
+
+    if (mergeWithPrevious) {
+      previous.text = `${previous.text} ${event.text}`;
+      previous.end = event.end;
+    } else if (mergeWithNext) {
+      next.text = `${event.text} ${next.text}`;
+      next.start = event.start;
+    } else {
+      continue;
+    }
+
+    rawEvents.splice(i, 1);
+    i--;
+  }
 
   // 3. Apply pyramid line splitting, duration clamping, and reading speed constraints
   const formattedEvents: { text: string; timestamp: [number, number] }[] = [];

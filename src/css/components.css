@@ -471,6 +471,60 @@
     0 20px 25px -5px rgb(0 0 0 / 0.05);
 }
 
+.segment-actions {
+  display: flex;
+  gap: 0.25rem;
+  opacity: 0;
+  transition: opacity 150ms ease-out;
+}
+
+.transcript-segment:hover .segment-actions,
+.transcript-segment:focus-within .segment-actions {
+  opacity: 1;
+}
+
+.segment-action-button {
+  display: grid;
+  width: 2.75rem;
+  height: 2.75rem;
+  place-items: center;
+  border: 1px solid #64748b;
+  border-radius: 0.25rem;
+  color: #475569;
+  background: rgb(255 255 255 / 0.7);
+}
+
+.segment-action-button svg {
+  width: 1.375rem;
+  height: 1.375rem;
+}
+
+.segment-action-button:hover,
+.segment-action-button:focus-visible {
+  color: #1d4ed8;
+  border-color: #2563eb;
+  background: #eff6ff;
+  outline: none;
+}
+
+.segment-action-button[aria-disabled="true"] {
+  cursor: not-allowed;
+  opacity: 0.45;
+}
+
+.dark .segment-action-button {
+  border-color: #94a3b8;
+  color: #cbd5e1;
+  background: rgb(15 23 42 / 0.35);
+}
+
+.dark .segment-action-button:hover,
+.dark .segment-action-button:focus-visible {
+  color: #bfdbfe;
+  border-color: #bfdbfe;
+  background: rgb(30 58 138 / 0.6);
+}
+
 .transcript-segment.active-segment,
 .active-segment {
   background: #dbeafe;

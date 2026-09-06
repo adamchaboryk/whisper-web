@@ -54,10 +54,21 @@ interface ProgressItem {
   phase?: string;
 }
 
+export interface TranscriptWord {
+  text: string;
+  timestamp: [number, number];
+}
+
+export interface TranscriptChunk {
+  text: string;
+  timestamp: [number, number | null];
+  words?: TranscriptWord[];
+}
+
 interface TranscriberUpdateData {
   data: {
     text: string;
-    chunks: { text: string; timestamp: [number, number | null] }[];
+    chunks: TranscriptChunk[];
     tps: number;
     duration?: number;
     progress?: number;
@@ -72,7 +83,7 @@ export interface TranscriberData {
   estimatedRemainingSeconds?: number;
   transcriptionSeconds?: number;
   text: string;
-  chunks: { text: string; timestamp: [number, number | null] }[];
+  chunks: TranscriptChunk[];
   language?: string;
   model?: string;
 }

@@ -6,6 +6,7 @@ import {
   useMemo,
   memo,
   useCallback,
+  type ReactNode,
 } from "react";
 import {
   FloatingArrow,
@@ -20,14 +21,17 @@ import {
   useHover,
   useInteractions,
 } from "@floating-ui/react";
-import { SummaryData, TranscriberData } from "../hooks/useTranscriber";
+import {
+  SummaryData,
+  TranscriptChunk,
+  TranscriberData,
+} from "../hooks/useTranscriber";
 import {
   formatAudioTimestamp,
   formatSrtTimeRange,
   parseAudioTimestamp,
 } from "../utils/AudioUtils";
 import {
-  formatSrtChunks,
   MAX_LINE_CHARACTERS,
   sanitizeHTML,
 } from "../utils/SubtitleUtils";
@@ -40,8 +44,10 @@ interface Props {
   language?: string;
   onChunkUpdate?: (
     index: number,
-    updatedChunk: { text: string; timestamp: [number, number | null] },
+    updatedChunk: TranscriptChunk,
   ) => void;
+  onAddSegment?: (index: number) => void;
+  onDeleteSegment?: (index: number) => void;
   onSeekTo?: (time: number) => void;
   isEditing?: boolean;
   onStartEditing?: () => void;
@@ -259,8 +265,75 @@ function TimestampButton({
   );
 }
 
+function SegmentActionButton(props: {
+  label: string;
+  onClick: () => void;
+  disabled?: boolean;
+  children: ReactNode;
+}) {
+  const [isTooltipOpen, setIsTooltipOpen] = useState(false);
+  const arrowRef = useRef<SVGSVGElement>(null);
+  const { refs, floatingStyles, context } = useFloating({
+    open: isTooltipOpen,
+    onOpenChange: setIsTooltipOpen,
+    placement: "top",
+    middleware: [
+      offset(8),
+      flip(),
+      shift({ padding: 8 }),
+      // Floating UI reads this ref after render to calculate arrow placement.
+      // eslint-disable-next-line react-hooks/refs
+      arrow({ element: arrowRef }),
+    ],
+    whileElementsMounted: autoUpdate,
+  });
+  const hover = useHover(context, { move: false, delay: { open: 500 } });
+  const focus = useFocus(context);
+  const { getReferenceProps, getFloatingProps } = useInteractions([
+    hover,
+    focus,
+  ]);
+
+  return (
+    <>
+      <button
+        ref={refs.setReference}
+        type='button'
+        className='segment-action-button'
+        onClick={() => {
+          if (!props.disabled) props.onClick();
+        }}
+        aria-label={props.label}
+        aria-disabled={props.disabled || undefined}
+        {...getReferenceProps()}
+      >
+        {props.children}
+      </button>
+      {isTooltipOpen && (
+        <FloatingPortal>
+          <span
+            // Floating UI requires this callback ref to position the tooltip.
+            // eslint-disable-next-line react-hooks/refs
+            ref={refs.setFloating}
+            style={floatingStyles}
+            className='z-20 whitespace-nowrap rounded bg-slate-900 px-2 py-1 text-xs font-medium text-white shadow-lg dark:bg-slate-100 dark:text-slate-900'
+            {...getFloatingProps({ role: "tooltip" })}
+          >
+            <FloatingArrow
+              ref={arrowRef}
+              context={context}
+              className='fill-slate-900 dark:fill-slate-100'
+            />
+            {props.label}
+          </span>
+        </FloatingPortal>
+      )}
+    </>
+  );
+}
+
 interface TranscriptSegmentProps {
-  chunk: { text: string; timestamp: [number, number | null] };
+  chunk: TranscriptChunk;
   index: number;
   isActive: boolean;
   isEditing: boolean;
@@ -269,8 +342,11 @@ interface TranscriptSegmentProps {
   dir?: "rtl" | "ltr";
   onChunkUpdate?: (
     index: number,
-    updatedChunk: { text: string; timestamp: [number, number | null] },
+    updatedChunk: TranscriptChunk,
   ) => void;
+  onAddSegment?: (index: number) => void;
+  onDeleteSegment?: (index: number) => void;
+  canDelete: boolean;
   onSeekTo?: (time: number) => void;
   onKeyDown: (
     event: React.KeyboardEvent<HTMLButtonElement>,
@@ -290,6 +366,9 @@ const TranscriptSegment = memo(function TranscriptSegment({
   lang,
   dir,
   onChunkUpdate,
+  onAddSegment,
+  onDeleteSegment,
+  canDelete,
   onSeekTo,
   onKeyDown,
   onButtonMount,
@@ -311,7 +390,7 @@ const TranscriptSegment = memo(function TranscriptSegment({
   return (
     <div
       ref={(el) => onContainerMount(el, index)}
-      className={`transcript-segment ${isActive ? "active-segment" : ""}`}
+      className={`transcript-segment group ${isActive ? "active-segment" : ""}`}
       aria-current={isActive ? "true" : undefined}
     >
       {isEditing && hasLongLine && (
@@ -357,6 +436,25 @@ const TranscriptSegment = memo(function TranscriptSegment({
                 onChunkUpdate?.(index, { ...chunk, text })
               }
             />
+            <div className='segment-actions ms-2 shrink-0' aria-label={`Segment ${index + 1} actions`}>
+              <SegmentActionButton
+                label='Add segment'
+                onClick={() => onAddSegment?.(index)}
+              >
+                <svg aria-hidden='true' viewBox='0 0 24 24' fill='none' stroke='currentColor' strokeWidth='2' strokeLinecap='round'>
+                  <path d='M12 5v14M5 12h14' />
+                </svg>
+              </SegmentActionButton>
+              <SegmentActionButton
+                label='Delete segment'
+                onClick={() => onDeleteSegment?.(index)}
+                disabled={!canDelete}
+              >
+                <svg aria-hidden='true' viewBox='0 0 24 24' fill='none' stroke='currentColor' strokeWidth='2' strokeLinecap='round' strokeLinejoin='round'>
+                  <path d='M3 6h18M8 6V4h8v2M19 6l-1 14H6L5 6M10 10v6M14 10v6' />
+                </svg>
+              </SegmentActionButton>
+            </div>
           </>
         ) : (
           <>
@@ -633,6 +731,8 @@ const Transcript = memo(function Transcript({
   chunks: editedChunks,
   language,
   onChunkUpdate,
+  onAddSegment,
+  onDeleteSegment,
   onSeekTo,
   isEditing,
   onStartEditing,
@@ -839,13 +939,10 @@ saveBlob(blob, "transcript.json");
   const exportSRT = () => {
     let srt = "";
 
-    // Ensure chunks are formatted before export just in case
-    const formattedChunks = formatSrtChunks(chunks);
-
-    for (let i = 0; i < formattedChunks.length; i++) {
+    for (let i = 0; i < chunks.length; i++) {
       srt += `${i + 1}\n`;
-      srt += `${formatSrtTimeRange(formattedChunks[i].timestamp[0], formattedChunks[i].timestamp[1] ?? formattedChunks[i].timestamp[0])}\n`;
-      srt += `${decodeSrtText(formattedChunks[i].text)}\n\n`;
+      srt += `${formatSrtTimeRange(chunks[i].timestamp[0], chunks[i].timestamp[1] ?? chunks[i].timestamp[0])}\n`;
+      srt += `${decodeSrtText(chunks[i].text)}\n\n`;
     }
     const blob = new Blob([srt], { type: "text/plain" });
     saveBlob(blob, "transcript.srt");
@@ -1301,6 +1398,9 @@ saveBlob(blob, "transcript.json");
                   lang={transcriptLanguage}
                   dir={transcriptDir}
                   onChunkUpdate={onChunkUpdate}
+                  onAddSegment={onAddSegment}
+                  onDeleteSegment={onDeleteSegment}
+                  canDelete={chunks.length > 1}
                   onSeekTo={handleSeek}
                   onKeyDown={handleKeyDown}
                   onButtonMount={handleButtonRef}
