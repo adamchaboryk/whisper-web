@@ -645,6 +645,32 @@ class PipelineFactory {
 self.addEventListener("message", async (event) => {
   const message = event.data;
 
+  if (message.type === "replace_dictionary") {
+    const escapeRegExp = (value) => value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    const replaceWord = (text, target, replacement) =>
+      text.replace(new RegExp(`\\b${escapeRegExp(target)}\\b`, "gi"), replacement);
+    let text = message.text || "";
+    const chunks = message.chunks.map((chunk) => {
+      let text = chunk.text;
+      let words = chunk.words;
+      for (const entry of message.entries) {
+        text = replaceWord(text, entry.targetWord, entry.replacementWord);
+        if (words) {
+          words = words.map((word) => ({
+            ...word,
+            text: replaceWord(word.text, entry.targetWord, entry.replacementWord),
+          }));
+        }
+      }
+      return { ...chunk, text, ...(words ? { words } : {}) };
+    });
+    for (const entry of message.entries) {
+      text = replaceWord(text, entry.targetWord, entry.replacementWord);
+    }
+    self.postMessage({ status: "dictionary_replaced", text, chunks });
+    return;
+  }
+
   const originalPostMessage = self.postMessage;
 
   try {

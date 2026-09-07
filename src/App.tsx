@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { ApplicationControls, AudioManager } from "./components/AudioManager";
 import Transcript from "./components/Transcript";
+import { useEncryptedDictionary } from "./hooks/useEncryptedDictionary";
 import {
   TranscriptChunk,
   TranscriberData,
@@ -9,6 +10,24 @@ import {
 
 function App() {
   const transcriber = useTranscriber();
+  const dictionary = useEncryptedDictionary();
+  const { entries, replaceTranscript } = dictionary;
+  const { output, setTranscript } = transcriber;
+  const isApplyingDictionaryRef = useRef(false);
+  useEffect(() => {
+    if (!output || output.isBusy || !entries.length) return;
+    if (isApplyingDictionaryRef.current) {
+      isApplyingDictionaryRef.current = false;
+      return;
+    }
+
+    isApplyingDictionaryRef.current = true;
+    void replaceTranscript(output.text, output.chunks).then((result) => {
+      setTranscript({ ...output, text: result.text, chunks: result.chunks });
+    }).catch(() => {
+      isApplyingDictionaryRef.current = false;
+    });
+  }, [entries, output, replaceTranscript, setTranscript]);
   const mediaSeekRef = useRef<((time: number) => void) | undefined>(undefined);
   const [savedTranscript, setSavedTranscript] = useState<{
     source: TranscriberData;
@@ -305,6 +324,7 @@ function App() {
             onTimeUpdate={handleTimeUpdate}
             playbackRate={playbackRate}
             isEditing={Boolean(draftChunks)}
+            onChunksReplace={handleChunksReplace}
           />
           <Transcript
             transcribedData={transcriber.output}
@@ -342,6 +362,8 @@ function App() {
           transcriber={transcriber}
           isAutoScrollEnabled={isAutoScrollEnabled}
           setIsAutoScrollEnabled={setIsAutoScrollEnabled}
+          transcriptChunks={previewChunks}
+          onChunksReplace={handleChunksReplace}
         />
       </aside>
       <footer>

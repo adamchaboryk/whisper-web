@@ -1,4 +1,17 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import {
+  FloatingArrow,
+  FloatingPortal,
+  arrow,
+  autoUpdate,
+  flip,
+  offset,
+  shift,
+  useFloating,
+  useFocus,
+  useHover,
+  useInteractions,
+} from "@floating-ui/react";
 import Constants, {
   LANGUAGES,
   MODELS,
@@ -6,7 +19,9 @@ import Constants, {
   getCachedWebGpuSupport,
 } from "../utils/Constants";
 import { Transcriber } from "../hooks/useTranscriber";
-import Modal from "./modal/Modal";
+import Modal, { ClearCacheButton } from "./modal/Modal";
+import { useEncryptedDictionary } from "../hooks/useEncryptedDictionary";
+import { TranscriptChunk } from "../hooks/useTranscriber";
 
 function titleCase(str: string) {
   str = str.toLowerCase();
@@ -17,6 +32,93 @@ function titleCase(str: string) {
     .join("");
 }
 
+function DictionaryAddButton() {
+  const [isTooltipOpen, setIsTooltipOpen] = useState(false);
+  const arrowRef = useRef<SVGSVGElement>(null);
+  const { refs, floatingStyles, context } = useFloating({
+    open: isTooltipOpen,
+    onOpenChange: setIsTooltipOpen,
+    placement: "top",
+    middleware: [
+      offset(8),
+      flip(),
+      shift({ padding: 8 }),
+      // eslint-disable-next-line react-hooks/refs
+      arrow({ element: arrowRef }),
+    ],
+    whileElementsMounted: autoUpdate,
+  });
+  const hover = useHover(context, { move: false });
+  const focus = useFocus(context);
+  const { getReferenceProps, getFloatingProps } = useInteractions([hover, focus]);
+
+  return (
+    <>
+      <button
+        ref={refs.setReference}
+        type='submit'
+        className='dictionary-add-button'
+        aria-label='Add rule'
+        {...getReferenceProps()}
+      >
+        <svg className='dictionary-add-icon' viewBox='0 0 24 24' fill='none' stroke='currentColor' strokeWidth='2.5' aria-hidden='true'>
+          <path strokeLinecap='round' d='M12 5v14M5 12h14' />
+        </svg>
+      </button>
+      {isTooltipOpen && (
+        <FloatingPortal>
+          <span
+            // Floating UI requires this callback ref to position the tooltip.
+            // eslint-disable-next-line react-hooks/refs
+            ref={refs.setFloating}
+            style={floatingStyles}
+            className='dictionary-tooltip'
+            {...getFloatingProps({ role: "tooltip" })}
+          >
+            <FloatingArrow ref={arrowRef} context={context} className='dictionary-tooltip-arrow' />
+            Add rule
+          </span>
+        </FloatingPortal>
+      )}
+    </>
+  );
+}
+
+interface DictionaryDeleteButtonProps {
+  targetWord: string;
+  buttonRef: (element: HTMLButtonElement | null) => void;
+  tabIndex: number;
+  onFocus: () => void;
+  onKeyDown: (event: React.KeyboardEvent<HTMLButtonElement>) => void;
+  onClick: () => void;
+}
+
+function DictionaryDeleteButton({
+  targetWord,
+  buttonRef,
+  tabIndex,
+  onFocus,
+  onKeyDown,
+  onClick,
+}: DictionaryDeleteButtonProps) {
+  return (
+    <button
+      ref={buttonRef}
+      type='button'
+      tabIndex={tabIndex}
+      className='dictionary-delete-button'
+      aria-label={`Delete ${targetWord} rule`}
+      onFocus={onFocus}
+      onKeyDown={onKeyDown}
+      onClick={onClick}
+    >
+      <svg className='dictionary-delete-icon' viewBox='0 0 24 24' fill='none' stroke='currentColor' strokeWidth='1.75' aria-hidden='true'>
+        <path strokeLinecap='round' strokeLinejoin='round' d='M4 7h16m-10 4v5m4-5v5M9 7V5h6v2m-9 0 1 13h10l1-13' />
+      </svg>
+    </button>
+  );
+}
+
 export interface SettingsModalProps {
   show: boolean;
   onSubmit: (url: string) => void;
@@ -24,9 +126,18 @@ export interface SettingsModalProps {
   transcriber: Transcriber;
   isAutoScrollEnabled: boolean;
   setIsAutoScrollEnabled: (enabled: boolean) => void;
+  transcriptChunks?: TranscriptChunk[];
+  onChunksReplace?: (chunks: TranscriptChunk[]) => void;
 }
 
 export default function SettingsModal(props: SettingsModalProps) {
+  const dictionary = useEncryptedDictionary();
+  const [targetWord, setTargetWord] = useState("");
+  const [replacementWord, setReplacementWord] = useState("");
+  const [dictionaryMessage, setDictionaryMessage] = useState("");
+  const [activeDeleteIndex, setActiveDeleteIndex] = useState(0);
+  const deleteButtonRefs = useRef<Array<HTMLButtonElement | null>>([]);
+  const importInputRef = useRef<HTMLInputElement>(null);
   const names = Object.values(LANGUAGES).map(titleCase);
   const isParakeet = props.transcriber.model === "parakeet.wgsl";
 
@@ -137,6 +248,37 @@ export default function SettingsModal(props: SettingsModalProps) {
     return props.transcriber.language;
   };
 
+  const importCsv = (file: File) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      try {
+        const importedEntries = dictionary.importEntries(String(reader.result));
+        if (props.transcriptChunks?.length && props.onChunksReplace) {
+          void dictionary.replaceChunks(props.transcriptChunks, importedEntries).then(props.onChunksReplace);
+        }
+        setDictionaryMessage("Dictionary imported.");
+      } catch (error) {
+        setDictionaryMessage(error instanceof Error ? error.message : "Could not import CSV.");
+      }
+    };
+    reader.readAsText(file);
+  };
+
+  const addDictionaryRule = () => {
+    if (!targetWord.trim()) return;
+    dictionary.addEntry(targetWord, replacementWord);
+    setTargetWord("");
+    setReplacementWord("");
+  };
+
+  const handleDeleteEntry = (id: string, index: number) => {
+    dictionary.deleteEntry(id);
+    setActiveDeleteIndex((current) =>
+      Math.min(current, Math.max(dictionary.entries.length - 2, 0)),
+    );
+    deleteButtonRefs.current.splice(index, 1);
+  };
+
   return (
     <Modal
       show={props.show}
@@ -152,7 +294,7 @@ export default function SettingsModal(props: SettingsModalProps) {
           </span>
           <select
             id='model-select'
-            className='form-select mt-1 mb-3'
+            className='form-select mt-3 mb-3'
             value={props.transcriber.model}
             onChange={(e) => {
               props.transcriber.setModel(e.target.value);
@@ -177,6 +319,7 @@ export default function SettingsModal(props: SettingsModalProps) {
                 ))}
             </optgroup>
           </select>
+          <ClearCacheButton cacheSize={cacheSize} onClose={props.onClose} />
 
           {!isParakeet && (
             <>
@@ -274,11 +417,82 @@ export default function SettingsModal(props: SettingsModalProps) {
               </select>
             </>
           )}
+          <section className='dictionary-section'>
+            <h3 className='dictionary-title'>
+              Text Replacement Dictionary
+            </h3>
+            <p className='dictionary-description'>
+              Automatically applies word replacements during caption generation. You can also{" "}
+              <button type='button' className='demo' onClick={() => importInputRef.current?.click()}>
+                import
+              </button>{" "}
+              or{" "}
+              <button type='button' className='demo' onClick={dictionary.exportEntries}>
+                export
+              </button>{" "}
+              dictionary entries as a CSV file.
+              <input ref={importInputRef} type='file' accept='.csv,text/csv' className='dictionary-file-input' onChange={(event) => { const file = event.target.files?.[0]; if (file) importCsv(file); event.target.value = ""; }} />
+            </p>
+            <form
+              className='dictionary-form'
+              onSubmit={(event) => {
+                event.preventDefault();
+                addDictionaryRule();
+              }}
+            >
+              <div className='dictionary-entry-row'>
+                <div className='dictionary-entry-fields'>
+                  <label htmlFor='dictionary-target-word' className='dictionary-field'>
+                    <span className='form-label'>Target Word</span>
+                    <input id='dictionary-target-word' className='dictionary-input' value={targetWord} onChange={(event) => setTargetWord(event.target.value)} />
+                  </label>
+                  <label htmlFor='dictionary-replacement-word' className='dictionary-field'>
+                    <span className='form-label'>Replacement Word</span>
+                    <input id='dictionary-replacement-word' className='dictionary-input' value={replacementWord} onChange={(event) => setReplacementWord(event.target.value)} />
+                  </label>
+                </div>
+                <DictionaryAddButton />
+              </div>
+            </form>
+            {dictionaryMessage && <p className='dictionary-message' role='status'>{dictionaryMessage}</p>}
+            {dictionary.entries.length > 0 && (
+              <div className='dictionary-table-container'>
+                <table className='dictionary-table'>
+                  <colgroup>
+                    <col />
+                    <col />
+                    <col />
+                  </colgroup>
+                  <thead><tr><th><span className='dictionary-visually-hidden'>Target Word</span></th><th><span className='dictionary-visually-hidden'>Replacement Word</span></th><th><span className='dictionary-visually-hidden'>Delete</span></th></tr></thead>
+                  <tbody>{dictionary.entries.map((entry, index) => <tr key={entry.id}><td>{entry.targetWord}</td><td>{entry.replacementWord}</td><td className='dictionary-delete-cell'><DictionaryDeleteButton
+                    targetWord={entry.targetWord}
+                    buttonRef={(element) => { deleteButtonRefs.current[index] = element; }}
+                    tabIndex={index === activeDeleteIndex ? 0 : -1}
+                    onFocus={() => setActiveDeleteIndex(index)}
+                    onKeyDown={(event) => {
+                      const lastIndex = dictionary.entries.length - 1;
+                      let nextIndex = index;
+                      if (event.key === "ArrowDown") nextIndex = Math.min(index + 1, lastIndex);
+                      if (event.key === "ArrowUp") nextIndex = Math.max(index - 1, 0);
+                      if (event.key === "Home") nextIndex = 0;
+                      if (event.key === "End") nextIndex = lastIndex;
+                      if (nextIndex !== index) {
+                        event.preventDefault();
+                        setActiveDeleteIndex(nextIndex);
+                        deleteButtonRefs.current[nextIndex]?.focus();
+                      }
+                    }}
+                    onClick={() => handleDeleteEntry(entry.id, index)}
+                  /></td></tr>)}</tbody>
+                </table>
+              </div>
+            )}
+          </section>
         </>
       }
       onClose={props.onClose}
       onSubmit={() => { }}
-      cacheSize={cacheSize}
+      cacheSize={0}
     />
   );
 }

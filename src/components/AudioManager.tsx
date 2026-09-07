@@ -305,6 +305,7 @@ export const AudioManager = React.memo(function AudioManager(props: {
   onTimeUpdate?: (time: number) => void;
   playbackRate?: number;
   isEditing?: boolean;
+  onChunksReplace?: (chunks: TranscriberData["chunks"]) => void;
 }) {
   const [isAudioProcessing, setIsAudioProcessing] = useState(false);
   const [audioProcessingProgress, setAudioProcessingProgress] =
@@ -1023,6 +1024,8 @@ export const ApplicationControls = React.memo(
     onThemeToggle: () => void;
     isAutoScrollEnabled: boolean;
     setIsAutoScrollEnabled: (enabled: boolean) => void;
+    transcriptChunks?: TranscriberData["chunks"];
+    onChunksReplace?: (chunks: TranscriberData["chunks"]) => void;
   }) {
     return (
       <>
@@ -1123,6 +1126,8 @@ export const ApplicationControls = React.memo(
             isApplicationControl
             isAutoScrollEnabled={props.isAutoScrollEnabled}
             setIsAutoScrollEnabled={props.setIsAutoScrollEnabled}
+            transcriptChunks={props.transcriptChunks}
+            onChunksReplace={props.onChunksReplace}
           />
         </nav>
       </>
@@ -1175,6 +1180,8 @@ function SettingsTile(props: {
   isApplicationControl?: boolean;
   isAutoScrollEnabled: boolean;
   setIsAutoScrollEnabled: (enabled: boolean) => void;
+  transcriptChunks?: TranscriberData["chunks"];
+  onChunksReplace?: (chunks: TranscriberData["chunks"]) => void;
 }) {
   const [showModal, setShowModal] = useState(false);
 
@@ -1209,6 +1216,8 @@ function SettingsTile(props: {
             transcriber={props.transcriber}
             isAutoScrollEnabled={props.isAutoScrollEnabled}
             setIsAutoScrollEnabled={props.setIsAutoScrollEnabled}
+            transcriptChunks={props.transcriptChunks}
+            onChunksReplace={props.onChunksReplace}
           />
         </React.Suspense>
       )}
