@@ -135,6 +135,8 @@ export default function SettingsModal(props: SettingsModalProps) {
   const [targetWord, setTargetWord] = useState("");
   const [replacementWord, setReplacementWord] = useState("");
   const [dictionaryMessage, setDictionaryMessage] = useState("");
+  const [isDictionaryError, setIsDictionaryError] = useState(false);
+  const dictionaryMessageRef = useRef<HTMLParagraphElement>(null);
   const [activeDeleteIndex, setActiveDeleteIndex] = useState(0);
   const deleteButtonRefs = useRef<Array<HTMLButtonElement | null>>([]);
   const importInputRef = useRef<HTMLInputElement>(null);
@@ -256,8 +258,10 @@ export default function SettingsModal(props: SettingsModalProps) {
         if (props.transcriptChunks?.length && props.onChunksReplace) {
           void dictionary.replaceChunks(props.transcriptChunks, importedEntries).then(props.onChunksReplace);
         }
+        setIsDictionaryError(false);
         setDictionaryMessage("Dictionary imported.");
       } catch (error) {
+        setIsDictionaryError(true);
         setDictionaryMessage(error instanceof Error ? error.message : "Could not import CSV.");
       }
     };
@@ -265,14 +269,29 @@ export default function SettingsModal(props: SettingsModalProps) {
   };
 
   const addDictionaryRule = () => {
-    if (!targetWord.trim()) return;
-    dictionary.addEntry(targetWord, replacementWord);
+    const errorMessage = dictionary.addEntry(targetWord, replacementWord);
+    if (errorMessage) {
+      setIsDictionaryError(true);
+      setDictionaryMessage(errorMessage);
+      requestAnimationFrame(() => dictionaryMessageRef.current?.focus());
+      return;
+    }
+    setIsDictionaryError(false);
+    setDictionaryMessage("");
     setTargetWord("");
     setReplacementWord("");
+    setDictionaryMessage("Dictionary rule added.");
+  };
+
+  const clearDictionaryMessage = () => {
+    setDictionaryMessage("");
+    setIsDictionaryError(false);
   };
 
   const handleDeleteEntry = (id: string, index: number) => {
     dictionary.deleteEntry(id);
+    setIsDictionaryError(false);
+    setDictionaryMessage("");
     setActiveDeleteIndex((current) =>
       Math.min(current, Math.max(dictionary.entries.length - 2, 0)),
     );
@@ -444,19 +463,27 @@ export default function SettingsModal(props: SettingsModalProps) {
                 <div className='dictionary-entry-fields'>
                   <label htmlFor='dictionary-target-word' className='dictionary-field'>
                     <span className='form-label'>Target Word</span>
-                    <input id='dictionary-target-word' className='dictionary-input' value={targetWord} onChange={(event) => setTargetWord(event.target.value)} />
+                    <input id='dictionary-target-word' className='dictionary-input' value={targetWord} onChange={(event) => { setTargetWord(event.target.value); clearDictionaryMessage(); }} />
                   </label>
                   <label htmlFor='dictionary-replacement-word' className='dictionary-field'>
                     <span className='form-label'>Replacement Word</span>
-                    <input id='dictionary-replacement-word' className='dictionary-input' value={replacementWord} onChange={(event) => setReplacementWord(event.target.value)} />
+                    <input id='dictionary-replacement-word' className='dictionary-input' value={replacementWord} onChange={(event) => { setReplacementWord(event.target.value); clearDictionaryMessage(); }} />
                   </label>
                 </div>
                 <DictionaryAddButton />
               </div>
             </form>
-            {dictionaryMessage && <p className='dictionary-message' role='status'>{dictionaryMessage}</p>}
+            {dictionaryMessage && <p ref={dictionaryMessageRef} className={`dictionary-message${isDictionaryError ? " dictionary-message--error" : " dictionary-message--success"}`} role='alert' aria-live='polite' tabIndex={-1}>
+              {isDictionaryError && <svg className='dictionary-message-icon' viewBox='0 0 24 24' fill='none' stroke='currentColor' strokeWidth='2' aria-hidden='true'><path strokeLinecap='round' strokeLinejoin='round' d='M12 9v4m0 4h.01M10.3 3.7 2.7 17a2 2 0 0 0 1.7 3h15.2a2 2 0 0 0 1.7-3L13.7 3.7a2 2 0 0 0-3.4 0Z' /></svg>}
+              {dictionaryMessage}
+            </p>}
             {dictionary.entries.length > 0 && (
-              <div className='dictionary-table-container'>
+              <div
+                className='dictionary-table-container'
+                role='region'
+                tabIndex={0}
+                aria-label='Text replacement dictionary entries'
+              >
                 <table className='dictionary-table'>
                   <colgroup>
                     <col />

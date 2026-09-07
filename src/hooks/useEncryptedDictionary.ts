@@ -24,6 +24,16 @@ const DEFAULT_ENTRIES: DictionaryEntry[] = [
   }
 ];
 
+function deduplicateEntries(entries: DictionaryEntry[]): DictionaryEntry[] {
+  const seenTargets = new Set<string>();
+  return entries.filter((entry) => {
+    const targetKey = entry.targetWord.trim().toLocaleLowerCase();
+    if (!targetKey || seenTargets.has(targetKey)) return false;
+    seenTargets.add(targetKey);
+    return true;
+  });
+}
+
 function toBase64(value: ArrayBuffer | Uint8Array): string {
   const bytes = value instanceof Uint8Array ? value : new Uint8Array(value);
   return btoa(String.fromCharCode(...bytes));
@@ -56,7 +66,7 @@ async function readEntries(): Promise<DictionaryEntry[]> {
       { name: "AES-GCM", iv: fromBase64(iv) }, await getStorageKey(), fromBase64(data),
     );
     const entries = JSON.parse(new TextDecoder().decode(decrypted));
-    return Array.isArray(entries) ? entries : DEFAULT_ENTRIES;
+    return Array.isArray(entries) ? deduplicateEntries(entries) : DEFAULT_ENTRIES;
   } catch {
     return DEFAULT_ENTRIES;
   }
@@ -122,7 +132,6 @@ export function useEncryptedDictionary() {
     const hasStoredEntries = Boolean(window.localStorage.getItem(STORAGE_KEY));
     const defaultsMigrated = window.localStorage.getItem(DEFAULTS_MIGRATED_KEY) === "true";
     let needsDefaultMigration = !defaultsMigrated;
-    let needsStorageInitialization = !hasStoredEntries;
     const loadEntries = () => readEntries().then((loadedEntries) => {
       const shouldMigrateDefaults = hasStoredEntries && needsDefaultMigration;
       const nextEntries = shouldMigrateDefaults
@@ -135,12 +144,9 @@ export function useEncryptedDictionary() {
         ]
         : loadedEntries;
       setEntries(nextEntries);
-      if (needsStorageInitialization || shouldMigrateDefaults) {
-        void writeEntries(nextEntries);
-        window.localStorage.setItem(DEFAULTS_MIGRATED_KEY, "true");
-      }
+      void writeEntries(nextEntries);
+      window.localStorage.setItem(DEFAULTS_MIGRATED_KEY, "true");
       needsDefaultMigration = false;
-      needsStorageInitialization = false;
     });
     void loadEntries();
     window.addEventListener(DICTIONARY_UPDATED_EVENT, loadEntries);
@@ -151,7 +157,6 @@ export function useEncryptedDictionary() {
       worker.terminate();
     };
   }, []);
-
   const save = (nextEntries: DictionaryEntry[]) => {
     setEntries(nextEntries);
     void writeEntries(nextEntries).then(() => {
@@ -177,9 +182,17 @@ export function useEncryptedDictionary() {
 
   return {
     entries,
-    addEntry: (targetWord: string, replacementWord: string) => {
+    addEntry: (targetWord: string, replacementWord: string): string | undefined => {
       const target = targetWord.trim(); const replacement = replacementWord.trim();
-      if (target) save([...entries, { id: crypto.randomUUID(), targetWord: target, replacementWord: replacement }]);
+      if (!target) return "Enter a target word.";
+      if (target === replacement) {
+        return "Target and replacement words must be different.";
+      }
+      if (entries.some((entry) => entry.targetWord.trim().toLocaleLowerCase() === target.toLocaleLowerCase())) {
+        return `A rule for "${target}" already exists.`;
+      }
+      save([{ id: crypto.randomUUID(), targetWord: target, replacementWord: replacement }, ...entries]);
+      return undefined;
     },
     deleteEntry: (id: string) => save(entries.filter((entry) => entry.id !== id)),
     importEntries: (content: string) => {
