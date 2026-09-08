@@ -37,8 +37,8 @@ export const TranscribeButton = React.forwardRef<HTMLButtonElement, Props>(
           <Spinner
             text={
               isModelLoading
-                ? `Recovering from ${recovery.resumeProgress.toFixed(0)}% (loading model ${modelLoadingProgress?.toFixed(0) ?? 0}%)...`
-                : `Recovering from ${recovery.resumeProgress.toFixed(0)}%...`
+                ? `This device had trouble processing a longer section. Preparing smaller audio segments (${recovery.resumeProgress.toFixed(0)}%)...`
+                : `This device had trouble processing a longer section. Continuing with smaller audio segments (${recovery.resumeProgress.toFixed(0)}%)...`
             }
           />
         ) : isModelLoading ? (
