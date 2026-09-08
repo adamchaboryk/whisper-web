@@ -309,12 +309,12 @@ function App() {
       <main className='app-main'>
         <div className='container flex flex-col justify-center items-center'>
           <h1 className='text-5xl font-extrabold tracking-tight text-slate-900 dark:text-slate-100 sm:text-7xl text-center'>
-            Transcribe audio
+            Transcribe
           </h1>
           <h2 className='mt-3 mb-5 px-4 text-center text-1xl font-semibold text-slate-900 dark:text-slate-300 sm:text-2xl'>
             <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor" className="inline-block h-[1em] w-[1em] align-[-0.15em] mr-1" viewBox="0 0 16 16">
               <path d="M8 0a4 4 0 0 1 4 4v2.05a2.5 2.5 0 0 1 2 2.45v5a2.5 2.5 0 0 1-2.5 2.5h-7A2.5 2.5 0 0 1 2 13.5v-5a2.5 2.5 0 0 1 2-2.45V4a4 4 0 0 1 4-4m0 1a3 3 0 0 0-3 3v2h6V4a3 3 0 0 0-3-3" />
-            </svg> Directly in your browser, locally on your device.
+            </svg> Transcribe audio and caption videos directly in your browser. Fully local, 100% private.
           </h2>
           <AudioManager
             transcriber={transcriber}
@@ -368,7 +368,7 @@ function App() {
       </aside>
       <footer>
         <p>Transcription is powered by machine learning models downloaded directly to your browser's local memory. Processing speed depends on your device's processing power. You can explore and switch models in <em>Settings.</em></p>
-        <p><strong>Note:</strong> This website works best in Google Chrome or Microsoft Edge on a desktop. Mobile devices may offer limited functionality.</p>
+        <p><strong>Note:</strong> This website works best in Google Chrome or Microsoft Edge on a desktop. Mobile and older computers may experience slower processing or reduced features.</p>
       </footer>
     </div >
   );
