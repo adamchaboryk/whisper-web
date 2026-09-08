@@ -787,6 +787,15 @@ self.addEventListener("message", async (event) => {
             errorMsg,
           )
         ) {
+          const retryMode = isSubChunk ? "skip-subchunk" : "30s-subchunks";
+          originalPostMessage({
+            status: "transcription_recovery",
+            data: {
+              reason: errorMsg,
+              retryMode,
+              resumeProgress: (offset / fullAudio.length) * 100,
+            },
+          });
           console.warn(
             `[whisper-web] Chunk failed at offset ${offset} (${isSubChunk ? "30s sub-chunk" : "5m chunk"}):`,
             errorMsg,

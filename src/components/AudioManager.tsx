@@ -881,6 +881,7 @@ export const AudioManager = React.memo(function AudioManager(props: {
                       props.transcriber.isModelLoading
                     }
                     modelLoadingProgress={overallModelLoadProgress}
+                    recovery={props.transcriber.recovery}
                     isTranscribing={props.transcriber.isBusy}
                     transcribingProgress={
                       props.transcriber.output?.progress

@@ -65,6 +65,12 @@ export interface TranscriptChunk {
   words?: TranscriptWord[];
 }
 
+export interface TranscriptionRecovery {
+  reason: string;
+  retryMode: "30s-subchunks" | "skip-subchunk";
+  resumeProgress: number;
+}
+
 interface TranscriberUpdateData {
   data: {
     text: string;
@@ -233,6 +239,7 @@ export interface Transcriber {
   onInputChange: () => void;
   isBusy: boolean;
   isModelLoading: boolean;
+  recovery?: TranscriptionRecovery;
   supportsSummarizer: boolean;
   progressItems: ProgressItem[];
   start: (
@@ -311,6 +318,9 @@ export function useTranscriber(): Transcriber {
   );
   const [isBusy, setIsBusy] = useState(false);
   const [isModelLoading, setIsModelLoading] = useState(false);
+  const [recovery, setRecovery] = useState<TranscriptionRecovery | undefined>(
+    undefined,
+  );
   const [summary, setSummary] = useState<SummaryData | undefined>(undefined);
   const [errorMessage, setErrorMessage] = useState<string | undefined>(
     undefined,
@@ -407,6 +417,7 @@ export function useTranscriber(): Transcriber {
         );
         break;
       case "transcription_progress":
+        setRecovery(undefined);
         setTranscript((prev) =>
           prev
             ? {
@@ -459,8 +470,14 @@ export function useTranscriber(): Transcriber {
           model: activeModelRef.current,
         });
         setIsBusy(busy);
+        if (!busy) {
+          setRecovery(undefined);
+        }
         break;
       }
+      case "transcription_recovery":
+        setRecovery(message.data as TranscriptionRecovery);
+        break;
       case "initiate":
         // Model file start load: add a new progress item to the list.
         setIsModelLoading(true);
@@ -479,6 +496,7 @@ export function useTranscriber(): Transcriber {
       case "error":
         setIsBusy(false);
         setIsModelLoading(false);
+        setRecovery(undefined);
         setProgressItems([]);
         setErrorMessage(message.data.message);
         break;
@@ -584,6 +602,7 @@ export function useTranscriber(): Transcriber {
         activeModelRef.current = requestModel;
         setTranscript(undefined);
         setIsBusy(true);
+        setRecovery(undefined);
         setTranscript({
           isBusy: true,
           text: "",
@@ -802,6 +821,7 @@ export function useTranscriber(): Transcriber {
       onInputChange,
       isBusy,
       isModelLoading,
+      recovery,
       supportsSummarizer,
       progressItems,
       start: postRequest,
@@ -826,6 +846,7 @@ export function useTranscriber(): Transcriber {
     onInputChange,
     isBusy,
     isModelLoading,
+    recovery,
     supportsSummarizer,
     progressItems,
     postRequest,
