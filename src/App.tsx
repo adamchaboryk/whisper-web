@@ -7,6 +7,8 @@ import {
   TranscriberData,
   useTranscriber,
 } from "./hooks/useTranscriber";
+import { hasWebGpuSupport, isSupportedBrowser } from "./utils/Constants";
+import { WarningIcon } from "./utils/Icons";
 
 function App() {
   const transcriber = useTranscriber();
@@ -366,11 +368,16 @@ function App() {
           onChunksReplace={handleChunksReplace}
         />
       </aside>
-      <footer>
-        <p>Transcription is powered by machine learning models downloaded directly to your browser's local memory. Processing speed depends on your device's processing power. You can explore and switch models in <em>Settings.</em></p>
-        <p><strong>Note:</strong> This website works best in Google Chrome or Microsoft Edge on a desktop. Mobile and older computers may experience slower processing or reduced features.</p>
-      </footer>
-    </div >
+
+      {(!isSupportedBrowser || !hasWebGpuSupport) && (
+        <footer>
+          <p className='mt-2 inline-flex items-center gap-2 rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-amber-900 dark:border-amber-700 dark:bg-amber-950 dark:text-amber-200'>
+            <WarningIcon className='inline-block h-[2em] w-[2em] shrink-0 align-[-0.15em]' />
+            <span><strong>Note:</strong> This website works best in Google Chrome or Microsoft Edge on a desktop. Mobile and older computers may experience slower processing or reduced features.</span>
+          </p>
+        </footer>
+      )}
+    </div>
   );
 }
 

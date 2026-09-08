@@ -134,6 +134,13 @@ export const LANGUAGES = {
 
 export const isMobileOrTablet = mobileTabletCheck();
 
+// Chromium-based Edge includes "Edg/"; Chrome excludes other Chromium forks that also match "Chrome/".
+export const isSupportedBrowser =
+  typeof navigator === "undefined" ||
+  /Edg\//.test(navigator.userAgent) ||
+  (/Chrome\//.test(navigator.userAgent) &&
+    !/OPR\/|Brave\/|SamsungBrowser\//.test(navigator.userAgent));
+
 export const hasWebGpuSupport =
   typeof navigator !== "undefined" &&
   "gpu" in navigator &&

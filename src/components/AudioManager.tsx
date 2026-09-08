@@ -1043,14 +1043,13 @@ export const ApplicationControls = React.memo(
               <>
                 <h3>Local transcription</h3>
                 <p>
-                  Transcription happens locally in your
-                  browser using OpenAI’s Whisper models or
-                  NVIDIA’s Parakeet model. Parakeet requires a
-                  WebGPU-capable browser. The selected model
+                  Transcription is powered by machine learning models downloaded directly to your browser's local memory. It is powered by OpenAI’s Whisper models or
+                  NVIDIA’s Parakeet model. The selected model
                   is downloaded and cached the first time you
                   use it. Your files never leave your
                   computer.
                 </p>
+                <p>Processing speed depends on your device's processing power. You can explore and switch models in Settings.</p>
 
                 <h3>AI summarization</h3>
                 <p>
@@ -1060,47 +1059,28 @@ export const ApplicationControls = React.memo(
                   supported in Google Chrome.
                 </p>
 
-                <h3>Acknowledgements</h3>
+                <h3>Open source</h3>
                 <p>
                   Maintained by Adam Chaboryk, Digital Media
                   Projects, Computing and Communications
                   Services at Toronto Metropolitan University.
                 </p>
-
                 <p>
-                  This tool is a customized fork of{" "}
-                  <a
-                    href='https://huggingface.co/Xenova'
-                    target='_blank'
-                    rel='noopener noreferrer'
-                  >
-                    Joshua Lochner's Whisper Web project.
-                  </a>{" "}
-                  This project also incorporates{" "}
-                  <a
-                    href='https://github.com/narcotic-sh/parakeet.wgsl'
-                    target='_blank'
-                    rel='noopener noreferrer'
-                  >
-                    Hamza Qayyum's parakeet.wgsl project.
-                  </a>
+                  Email feedback to{" "} <a href='mailto:adam.chaboryk@torontomu.ca'>adam.chaboryk@torontomu.ca</a>
                 </p>
-
-                <h3>Open source</h3>
                 <p>
-                  Email feedback to{" "}
-                  <a href='mailto:adam.chaboryk@torontomu.ca'>
-                    adam.chaboryk@torontomu.ca
-                  </a>{" "}
-                  or view{" "}
+                  View{" "}
                   <a
                     href='https://github.com/adamchaboryk/whisper-web'
                     target='_blank'
                     rel='noopener noreferrer'
                   >
-                    source code on GitHub.
+                    source code and acknowledgements on GitHub.
                   </a>
                 </p>
+
+                <h3>Accessibility</h3>
+                <p>This app was created with accessibility in mind. If you encounter any barriers or have suggestions to improve your experience, please share your feedback.</p>
               </>
             }
           />

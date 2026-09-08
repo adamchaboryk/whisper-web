@@ -261,7 +261,6 @@ export default function FindReplacePanel(props: FindReplacePanelProps) {
                 className='find-replace-icon-button'
                 onClick={props.onClose}
                 aria-label='Close find and replace'
-                title='Close (Esc)'
               >
                 <svg
                   aria-hidden='true'
