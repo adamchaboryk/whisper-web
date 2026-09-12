@@ -718,6 +718,88 @@ function CancelButton(props: { onCancel?: () => void; shortcut: string }) {
   );
 }
 
+function FindButton(props: {
+  isOpen: boolean;
+  onToggle: () => void;
+  shortcut: string;
+  onButtonRef?: (el: HTMLButtonElement | null) => void;
+}) {
+  const [isTooltipOpen, setIsTooltipOpen] = useState(false);
+  const arrowRef = useRef<SVGSVGElement>(null);
+  const { refs, floatingStyles, context } = useFloating({
+    open: isTooltipOpen && !props.isOpen,
+    onOpenChange: setIsTooltipOpen,
+    placement: "top",
+    middleware: [
+      offset(10),
+      flip(),
+      shift({ padding: 8 }),
+      // Floating UI reads this ref after render to calculate arrow placement.
+      // eslint-disable-next-line react-hooks/refs
+      arrow({ element: arrowRef }),
+    ],
+    whileElementsMounted: autoUpdate,
+  });
+  const hover = useHover(context, {
+    move: false,
+    delay: { open: 800, close: 0 },
+  });
+  const focus = useFocus(context);
+  const { getReferenceProps, getFloatingProps } = useInteractions([
+    hover,
+    focus,
+  ]);
+
+  return (
+    <>
+      <button
+        ref={(el) => {
+          refs.setReference(el);
+          props.onButtonRef?.(el);
+        }}
+        type='button'
+        className='export-button gap-1.5'
+        onClick={() => {
+          setIsTooltipOpen(false);
+          props.onToggle();
+        }}
+        aria-keyshortcuts='Meta+F Control+F'
+        aria-expanded={props.isOpen}
+        {...getReferenceProps()}
+      >
+        <svg
+          aria-hidden='true'
+          viewBox='0 0 20 20'
+          fill='currentColor'
+          className='h-4 w-4'
+        >
+          <path
+            fillRule='evenodd'
+            d='M9 3.5a5.5 5.5 0 1 0 0 11 5.5 5.5 0 0 0 0-11ZM2 9a7 7 0 1 1 12.6 4.2l3.1 3.1a.75.75 0 1 1-1.06 1.06l-3.1-3.1A7 7 0 0 1 2 9Z'
+            clipRule='evenodd'
+          />
+        </svg>
+        Find
+      </button>
+      {isTooltipOpen && !props.isOpen && (
+        <span
+          ref={refs.setFloating}
+          style={floatingStyles}
+          className='z-20 whitespace-nowrap rounded bg-slate-900 px-2 py-1 text-xs font-medium text-white shadow-lg dark:bg-slate-100 dark:text-slate-900'
+          {...getFloatingProps({ role: "tooltip" })}
+        >
+          <FloatingArrow
+            ref={arrowRef}
+            context={context}
+            className='fill-slate-900 dark:fill-slate-100'
+          />
+          {props.shortcut}
+        </span>
+      )}
+    </>
+  );
+}
+
 function PlaybackSpeedSelect(props: {
   playbackRate: number;
   onPlaybackRateChange: (rate: number) => void;
@@ -858,35 +940,6 @@ const Transcript = memo(function Transcript({
   const [findButtonEl, setFindButtonEl] = useState<HTMLButtonElement | null>(
     null,
   );
-  const [isFindTooltipOpen, setIsFindTooltipOpen] = useState(false);
-  const findArrowRef = useRef<SVGSVGElement>(null);
-  const {
-    refs: findTooltipRefs,
-    floatingStyles: findTooltipFloatingStyles,
-    context: findTooltipContext,
-  } = useFloating({
-    open: isFindTooltipOpen,
-    onOpenChange: setIsFindTooltipOpen,
-    placement: "top",
-    middleware: [
-      offset(10),
-      flip(),
-      shift({ padding: 8 }),
-      // eslint-disable-next-line react-hooks/refs
-      arrow({ element: findArrowRef }),
-    ],
-    whileElementsMounted: autoUpdate,
-  });
-  const findTooltipHover = useHover(findTooltipContext, {
-    move: false,
-    delay: { open: 800, close: 0 },
-  });
-  const findTooltipFocus = useFocus(findTooltipContext);
-  const {
-    getReferenceProps: getFindTooltipReferenceProps,
-    getFloatingProps: getFindTooltipFloatingProps,
-  } = useInteractions([findTooltipHover, findTooltipFocus]);
-
   const [findReplaceOpen, setFindReplaceOpen] = useState(false);
   const [findReplaceMode, setFindReplaceMode] = useState<"find" | "replace">(
     "find",
@@ -1606,51 +1659,16 @@ saveBlob(blob, "transcript.json");
                 />
               )}
               {isEditing && (
-                <button
-                  ref={(el) => {
-                    findTooltipRefs.setReference(el);
-                    setFindButtonEl(el);
-                  }}
-                  type='button'
-                  className='export-button gap-1.5'
-                  onClick={() =>
+                <FindButton
+                  isOpen={findReplaceOpen}
+                  onToggle={() =>
                     findReplaceOpen
                       ? closeFindReplace()
                       : openFindReplace("find")
                   }
-                  aria-keyshortcuts='Meta+F Control+F'
-                  aria-expanded={findReplaceOpen}
-                  {...getFindTooltipReferenceProps()}
-                >
-                  <svg
-                    aria-hidden='true'
-                    viewBox='0 0 20 20'
-                    fill='currentColor'
-                    className='h-4 w-4'
-                  >
-                    <path
-                      fillRule='evenodd'
-                      d='M9 3.5a5.5 5.5 0 1 0 0 11 5.5 5.5 0 0 0 0-11ZM2 9a7 7 0 1 1 12.6 4.2l3.1 3.1a.75.75 0 1 1-1.06 1.06l-3.1-3.1A7 7 0 0 1 2 9Z'
-                      clipRule='evenodd'
-                    />
-                  </svg>
-                  Find
-                </button>
-              )}
-              {isFindTooltipOpen && (
-                <span
-                  ref={findTooltipRefs.setFloating}
-                  style={findTooltipFloatingStyles}
-                  className='z-20 whitespace-nowrap rounded bg-slate-900 px-2 py-1 text-xs font-medium text-white shadow-lg dark:bg-slate-100 dark:text-slate-900'
-                  {...getFindTooltipFloatingProps({ role: "tooltip" })}
-                >
-                  <FloatingArrow
-                    ref={findArrowRef}
-                    context={findTooltipContext}
-                    className='fill-slate-900 dark:fill-slate-100'
-                  />
-                  {findShortcut}
-                </span>
+                  shortcut={findShortcut}
+                  onButtonRef={setFindButtonEl}
+                />
               )}
             </div>
             <div className='flex items-center gap-3'>

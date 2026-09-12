@@ -686,7 +686,7 @@ export const AudioManager = React.memo(function AudioManager(props: {
     const frame1 = window.requestAnimationFrame(() => {
       setAudioReadyAnnouncement("");
       frame2 = window.requestAnimationFrame(() => {
-        setAudioReadyAnnouncement("Audio upload completed.");
+        setAudioReadyAnnouncement("Media upload completed.");
         transcribeButtonRef.current?.focus();
       });
     });
@@ -884,9 +884,12 @@ export const AudioManager = React.memo(function AudioManager(props: {
           {audioData.mimeType.startsWith("video/") &&
             !audioData.isSampleVideo &&
             !/^source\.\w+$/.test(audioData.sourceName) && (
-              <p className='w-full max-w-full px-4 mt-5 text-sm font-medium text-slate-700 dark:text-slate-300 truncate text-center'>
+              <h2 className='w-full max-w-full px-4 mt-5 text-lg font-medium text-slate-700 dark:text-slate-300 truncate text-center'>
+                <span className="sr-only">
+                  Media title:
+                </span>
                 {stripFileExtension(audioData.sourceName)}
-              </p>
+              </h2>
             )}
           <AudioPlayer
             audioUrl={audioData.url}
