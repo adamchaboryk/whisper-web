@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef } from "react";
+import { useEffect, useEffectEvent, useMemo, useRef } from "react";
 import { formatSrtTimeRange } from "../utils/AudioUtils";
 
 export default function AudioPlayer(props: {
@@ -15,13 +15,27 @@ export default function AudioPlayer(props: {
   const audioPlayer = useRef<HTMLAudioElement>(null);
   const videoPlayer = useRef<HTMLVideoElement>(null);
   const audioSource = useRef<HTMLSourceElement>(null);
+  const applyPlaybackRate = useEffectEvent((mediaPlayer: HTMLMediaElement) => {
+    mediaPlayer.playbackRate = props.playbackRate ?? 1;
+  });
 
   // Updates src when url changes
   useEffect(() => {
     const mediaPlayer = audioPlayer.current ?? videoPlayer.current;
     if (mediaPlayer && audioSource.current) {
+      const handleLoadedMetadata = () => applyPlaybackRate(mediaPlayer);
+
       audioSource.current.src = props.audioUrl;
       mediaPlayer.load();
+      applyPlaybackRate(mediaPlayer);
+      mediaPlayer.addEventListener("loadedmetadata", handleLoadedMetadata);
+
+      return () => {
+        mediaPlayer.removeEventListener(
+          "loadedmetadata",
+          handleLoadedMetadata,
+        );
+      };
     }
   }, [props.audioUrl]);
 
@@ -102,7 +116,7 @@ export default function AudioPlayer(props: {
   }, [subtitleUrl]);
 
   return (
-    <div className='flex relative z-10 p-4 w-full mt-1'>
+    <div className='flex relative z-10 p-4 w-full'>
       {props.mimeType.startsWith("video/") ? (
         <video
           ref={videoPlayer}

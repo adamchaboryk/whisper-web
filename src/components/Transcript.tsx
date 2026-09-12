@@ -848,6 +848,7 @@ const Transcript = memo(function Transcript({
   const transcriptContainerRef = useRef<HTMLDivElement>(null);
   const chunkRefs = useRef<(HTMLDivElement | null)[]>([]);
   const activeChunkIndexRef = useRef<number>(-1);
+  const lastActiveChunkIndexRef = useRef<number>(-1);
   const [autoScrollPaused, setAutoScrollPaused] = useState(false);
   const prevTimeRef = useRef<number | undefined>(undefined);
   const autoScrollResumeTimerRef = useRef<number | null>(null);
@@ -1397,6 +1398,7 @@ saveBlob(blob, "transcript.json");
       const nextIndex = findActiveChunkIndex(currentChunks, time);
       if (nextIndex !== -1 && nextIndex !== activeIndexRef.current) {
         activeIndexRef.current = nextIndex;
+        lastActiveChunkIndexRef.current = nextIndex;
         setInternalActiveIndex(nextIndex);
         scrollToChunk(nextIndex);
       } else if (nextIndex === -1 && activeIndexRef.current !== -1) {
@@ -1432,6 +1434,7 @@ saveBlob(blob, "transcript.json");
 
     if (activeIndex !== -1 && activeIndex !== activeChunkIndexRef.current) {
       activeChunkIndexRef.current = activeIndex;
+      lastActiveChunkIndexRef.current = activeIndex;
       scrollToChunk(activeIndex);
     }
   }, [
@@ -1476,7 +1479,13 @@ saveBlob(blob, "transcript.json");
     onStartEditing?.();
     if (chunks.length) {
       setEditorFocus({
-        index: activeIndex === -1 ? 0 : activeIndex,
+        index:
+          activeIndex === -1
+            ? Math.min(
+              Math.max(lastActiveChunkIndexRef.current, 0),
+              chunks.length - 1,
+            )
+            : activeIndex,
         atEnd: false,
       });
     } else {

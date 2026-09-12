@@ -90,6 +90,21 @@ function isKnownNonAudioLink(parsedUrl: URL): boolean {
   );
 }
 
+// Derives a human-readable file name from the URL's path for display as a title.
+function getFileNameFromUrl(parsedUrl: URL): string | undefined {
+  const lastSegment = parsedUrl.pathname.split("/").filter(Boolean).pop();
+  if (!lastSegment) return undefined;
+  try {
+    return decodeURIComponent(lastSegment);
+  } catch {
+    return lastSegment;
+  }
+}
+
+function stripFileExtension(fileName: string): string {
+  return fileName.replace(/\.[^./]+$/, "");
+}
+
 function getAudioUrlErrorMessage(error: unknown): string {
   if (error instanceof Error) {
     if (error.name === "AbortError") {
@@ -322,6 +337,7 @@ export const AudioManager = React.memo(function AudioManager(props: {
       source: AudioSource;
       mimeType: string;
       isSampleVideo?: boolean;
+      isSampleAudio?: boolean;
     }
     | undefined
   >(undefined);
@@ -483,7 +499,13 @@ export const AudioManager = React.memo(function AudioManager(props: {
   );
 
   const setAudioFromDownload = useCallback(
-    async (data: ArrayBuffer, mimeType: string, isSampleVideo = false) => {
+    async (
+      data: ArrayBuffer,
+      mimeType: string,
+      isSampleVideo = false,
+      sourceName?: string,
+      isSampleAudio = false,
+    ) => {
       const blob = new Blob([data], { type: mimeType });
       const blobUrl = URL.createObjectURL(blob);
       try {
@@ -497,11 +519,14 @@ export const AudioManager = React.memo(function AudioManager(props: {
         setAudioData({
           buffer: decoded,
           blob: blob,
-          sourceName: `source.${mimeType.split("/")[1]?.split(";")[0] || (mimeType.startsWith("video/") ? "webm" : "wav")}`,
+          sourceName:
+            sourceName ||
+            `source.${mimeType.split("/")[1]?.split(";")[0] || (mimeType.startsWith("video/") ? "webm" : "wav")}`,
           url: blobUrl,
           source: AudioSource.URL,
           mimeType: mimeType,
           isSampleVideo,
+          isSampleAudio,
         });
       } catch (error) {
         URL.revokeObjectURL(blobUrl);
@@ -576,7 +601,14 @@ export const AudioManager = React.memo(function AudioManager(props: {
             parsedUrl.href === sampleVideoUrl ||
             parsedUrl.pathname.includes("sample-video.mp4") ||
             parsedUrl.pathname.includes("video-demo.webm");
-          await setAudioFromDownload(buffer, mimeType, isSampleVideo);
+          const isSampleAudio = parsedUrl.href === sampleAudioUrl;
+          await setAudioFromDownload(
+            buffer,
+            mimeType,
+            isSampleVideo,
+            getFileNameFromUrl(parsedUrl),
+            isSampleAudio,
+          );
           return;
         }
 
@@ -607,7 +639,14 @@ export const AudioManager = React.memo(function AudioManager(props: {
           parsedUrl.href === sampleVideoUrl ||
           parsedUrl.pathname.includes("sample-video.mp4") ||
           parsedUrl.pathname.includes("video-demo.webm");
-        await setAudioFromDownload(data, mimeType, isSampleVideo);
+        const isSampleAudio = parsedUrl.href === sampleAudioUrl;
+        await setAudioFromDownload(
+          data,
+          mimeType,
+          isSampleVideo,
+          getFileNameFromUrl(parsedUrl),
+          isSampleAudio,
+        );
       } catch (error) {
         if (error instanceof Error && error.name === "AbortError") {
           return;
@@ -619,7 +658,7 @@ export const AudioManager = React.memo(function AudioManager(props: {
         setIsAudioProcessing(false);
       }
     },
-    [sampleVideoUrl, setAudioFromDownload],
+    [sampleVideoUrl, sampleAudioUrl, setAudioFromDownload],
   );
 
   useEffect(() => {
@@ -782,24 +821,26 @@ export const AudioManager = React.memo(function AudioManager(props: {
         </div>
       </div>
 
-      <div className='demo-container'>
-        Try
-        <button
-          type='button'
-          className='demo'
-          onClick={() => handleUrlUpdate(sampleAudioUrl)}
-        >
-          sample audio
-        </button>
-        <span>or</span>
-        <button
-          type='button'
-          className='demo'
-          onClick={() => handleUrlUpdate(sampleVideoUrl)}
-        >
-          sample video.
-        </button>
-      </div>
+      {(!audioData || audioData.isSampleAudio || audioData.isSampleVideo) && (
+        <div className='demo-container'>
+          Try
+          <button
+            type='button'
+            className='demo'
+            onClick={() => handleUrlUpdate(sampleAudioUrl)}
+          >
+            sample audio
+          </button>
+          <span>or</span>
+          <button
+            type='button'
+            className='demo'
+            onClick={() => handleUrlUpdate(sampleVideoUrl)}
+          >
+            sample video.
+          </button>
+        </div>
+      )}
 
       <p
         className='sr-only'
@@ -827,6 +868,13 @@ export const AudioManager = React.memo(function AudioManager(props: {
       )}
       {audioData && (
         <>
+          {audioData.mimeType.startsWith("video/") &&
+            !audioData.isSampleVideo &&
+            !/^source\.\w+$/.test(audioData.sourceName) && (
+              <p className='w-full max-w-full px-4 mt-5 text-sm font-medium text-slate-700 dark:text-slate-300 truncate text-center'>
+                {stripFileExtension(audioData.sourceName)}
+              </p>
+            )}
           <AudioPlayer
             audioUrl={audioData.url}
             mimeType={audioData.mimeType}
