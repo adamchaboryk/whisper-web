@@ -67,6 +67,7 @@ function App() {
     return storedTheme ? storedTheme === "dark" : window.matchMedia("(prefers-color-scheme: dark)").matches;
   });
   const [playbackRate, setPlaybackRate] = useState(1);
+  const [mediaTitle, setMediaTitle] = useState<string | undefined>(undefined);
 
   useEffect(() => {
     window.localStorage.setItem("whisper-web-autoscroll", isAutoScrollEnabled.toString());
@@ -327,6 +328,7 @@ function App() {
             playbackRate={playbackRate}
             isEditing={Boolean(draftChunks)}
             onChunksReplace={handleChunksReplace}
+            onMediaTitleChange={setMediaTitle}
           />
           <Transcript
             transcribedData={transcriber.output}
@@ -354,6 +356,7 @@ function App() {
             setIsAutoScrollSettingEnabled={setIsAutoScrollEnabled}
             playbackRate={playbackRate}
             onPlaybackRateChange={setPlaybackRate}
+            mediaTitle={mediaTitle}
           />
         </div>
       </main >

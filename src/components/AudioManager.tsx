@@ -321,6 +321,7 @@ export const AudioManager = React.memo(function AudioManager(props: {
   playbackRate?: number;
   isEditing?: boolean;
   onChunksReplace?: (chunks: TranscriberData["chunks"]) => void;
+  onMediaTitleChange?: (title: string | undefined) => void;
 }) {
   const [isAudioProcessing, setIsAudioProcessing] = useState(false);
   const [audioProcessingProgress, setAudioProcessingProgress] =
@@ -351,6 +352,18 @@ export const AudioManager = React.memo(function AudioManager(props: {
     };
   }, [audioData]);
   const requestAbortControllerRef = useRef<AbortController | null>(null);
+
+  const { onMediaTitleChange } = props;
+  useEffect(() => {
+    // Generic auto-generated names (e.g. "source.mp4", "recording.webm") aren't real titles.
+    const isGenericSourceName = (name: string) =>
+      /^(source|recording)\.\w+$/i.test(name);
+    onMediaTitleChange?.(
+      audioData && !isGenericSourceName(audioData.sourceName)
+        ? audioData.sourceName
+        : undefined,
+    );
+  }, [audioData, onMediaTitleChange]);
 
   const [showWarningModal, setShowWarningModal] = useState(false);
   const [isHoveringFile, setIsHoveringFile] = useState(false);

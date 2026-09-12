@@ -75,6 +75,7 @@ interface Props {
   playbackRate?: number;
   onPlaybackRateChange?: (rate: number) => void;
   onChunksReplace?: (chunks: TranscriptChunk[]) => void;
+  mediaTitle?: string;
 }
 
 function formatTranscriptionDuration(seconds: number): string {
@@ -842,6 +843,7 @@ const Transcript = memo(function Transcript({
   playbackRate = 1,
   onPlaybackRateChange,
   onChunksReplace,
+  mediaTitle,
 }: Props) {
   const divRef = useRef<HTMLDivElement>(null);
   const timestampRefs = useRef<(HTMLButtonElement | null)[]>([]);
@@ -1139,14 +1141,23 @@ const Transcript = memo(function Transcript({
     URL.revokeObjectURL(url);
   };
 
+  // Turns a media title into a lowercase, dash-separated filename slug.
+  const slugifyTitle = (title: string): string =>
+    title
+      .replace(/\.[^./]+$/, "")
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, "-")
+      .replace(/^-+|-+$/g, "");
+
   const exportTXT = () => {
     const text = chunks
       .map((chunk) => extractPlainText(chunk.text))
       .join(" ")
       .trim();
 
+    const slug = mediaTitle && slugifyTitle(mediaTitle);
     const blob = new Blob([text], { type: "text/plain" });
-    saveBlob(blob, "transcript.txt");
+    saveBlob(blob, slug ? `transcript-${slug}.txt` : "transcript.txt");
   };
 
   /*
@@ -1169,8 +1180,9 @@ saveBlob(blob, "transcript.json");
       srt += `${formatSrtTimeRange(chunks[i].timestamp[0], chunks[i].timestamp[1] ?? chunks[i].timestamp[0])}\n`;
       srt += `${decodeSrtText(chunks[i].text)}\n\n`;
     }
+    const slug = mediaTitle && slugifyTitle(mediaTitle);
     const blob = new Blob([srt], { type: "text/plain" });
-    saveBlob(blob, "transcript.srt");
+    saveBlob(blob, slug ? `${slug}.srt` : "transcript.srt");
   };
 
   const [copiedState, setCopiedState] = useState<
