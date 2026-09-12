@@ -1474,20 +1474,24 @@ saveBlob(blob, "transcript.json");
 
   const handleStartEditing = useCallback(() => {
     onStartEditing?.();
-    requestAnimationFrame(() => {
-      transcriptContainerRef.current?.focus();
-    });
-  }, [onStartEditing]);
-
-  const prevIsEditingRef = useRef(isEditing);
-  useEffect(() => {
-    if (!prevIsEditingRef.current && isEditing) {
+    if (chunks.length) {
+      setEditorFocus({
+        index: activeIndex === -1 ? 0 : activeIndex,
+        atEnd: false,
+      });
+    } else {
       requestAnimationFrame(() => {
         transcriptContainerRef.current?.focus();
       });
     }
-    prevIsEditingRef.current = isEditing;
-  }, [isEditing]);
+  }, [onStartEditing, chunks.length, activeIndex]);
+
+  useEffect(() => {
+    if (isEditing || chunks.length) return;
+    requestAnimationFrame(() => {
+      transcriptContainerRef.current?.focus();
+    });
+  }, [isEditing, chunks.length]);
 
   useEffect(() => {
     const handleGlobalKeyDown = (event: KeyboardEvent) => {
