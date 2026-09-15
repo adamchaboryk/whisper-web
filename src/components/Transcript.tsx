@@ -1202,9 +1202,14 @@ const Transcript = memo(function Transcript({
       .replace(/[^a-z0-9]+/g, "-")
       .replace(/^-+|-+$/g, "");
 
+  // Plain text with the pyramid-style line breaks (used to balance SRT/visual
+  // subtitle lines) collapsed back into spaces so sentences read continuously.
+  const extractSentenceText = (html: string): string =>
+    extractPlainText(html).replace(/\s*\n+\s*/g, " ").trim();
+
   const exportTXT = () => {
     const text = chunks
-      .map((chunk) => extractPlainText(chunk.text))
+      .map((chunk) => extractSentenceText(chunk.text))
       .join(" ")
       .trim();
 
@@ -1252,7 +1257,7 @@ saveBlob(blob, "transcript.json");
 
   const copyToClipboard = async () => {
     let text = chunks
-      .map((chunk) => extractPlainText(chunk.text))
+      .map((chunk) => extractSentenceText(chunk.text))
       .join(" ")
       .trim();
 
