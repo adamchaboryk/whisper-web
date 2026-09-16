@@ -1042,6 +1042,10 @@ export const AudioManager = React.memo(function AudioManager(props: {
                 works offline. You can change models anytime in{" "}
                 <em>Settings.</em>
               </p>
+              <p className='mb-4'>
+                Transcription is not 100% accurate
+                and may produce errors depending on audio quality. It is strongly encouraged to review and fix any inaccuracies before exporting.
+              </p>
               {isMobileOrTablet && (
                 <p className='mb-4 text-sm bg-blue-50 dark:bg-blue-900/30 text-blue-800 dark:text-blue-200 p-3 rounded-md'>
                   <strong>⚠️ Mobile device detected:</strong>{" "}
@@ -1114,6 +1118,8 @@ export const ApplicationControls = React.memo(
                   computer.
                 </p>
                 <p>Processing speed depends on your device's processing power. You can explore and switch models in Settings.</p>
+                <p>Transcription is not 100% accurate
+                  and may produce errors depending on audio quality. It is strongly encouraged to review and fix any inaccuracies before exporting.</p>
 
                 <h3>AI summarization</h3>
                 <p>
@@ -1136,8 +1142,6 @@ export const ApplicationControls = React.memo(
                   View{" "}
                   <a
                     href='https://github.com/adamchaboryk/whisper-web'
-                    target='_blank'
-                    rel='noopener noreferrer'
                   >
                     source code and acknowledgements on GitHub.
                   </a>
