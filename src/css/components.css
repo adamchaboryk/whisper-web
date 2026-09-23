@@ -275,6 +275,7 @@
   background: var(--surface-muted);
   color: var(--text);
   padding: 0.4rem 0.625rem;
+  margin-top: 0.2rem;
 }
 
 .dictionary-input:focus {
