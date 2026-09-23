@@ -450,6 +450,7 @@
   white-space: nowrap;
 }
 
+.dark .summary-settings-section,
 .dark .dictionary-section {
   border-color: #475569;
 }
