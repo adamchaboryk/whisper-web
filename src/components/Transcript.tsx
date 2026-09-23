@@ -52,9 +52,11 @@ import Modal from "./modal/Modal";
 
 // Splits a key-points summary into paragraphs and semantic bullet items,
 // stripping markdown-style "*"/"-" markers so lists render as real <ul><li>.
+// Consecutive bullet blocks (e.g. from separate chunks of a long transcript)
+// are merged into a single list instead of rendering as several adjacent <ul>s.
 function parseKeyPointBlocks(text: string): { bullets: string[]; text: string }[] {
   const bulletPattern = /^\s*[*-]\s+(.*)$/;
-  return text.split(/\n{2,}/).map((block) => {
+  const blocks = text.split(/\n{2,}/).map((block) => {
     const lines = block.split("\n").filter((line) => line.trim().length > 0);
     const bulletLines = lines
       .map((line) => line.match(bulletPattern)?.[1])
@@ -65,6 +67,16 @@ function parseKeyPointBlocks(text: string): { bullets: string[]; text: string }[
     }
     return { bullets: [], text: block };
   });
+
+  return blocks.reduce<{ bullets: string[]; text: string }[]>((merged, block) => {
+    const previous = merged[merged.length - 1];
+    if (block.bullets.length > 0 && previous?.bullets.length) {
+      previous.bullets.push(...block.bullets);
+      return merged;
+    }
+    merged.push(block);
+    return merged;
+  }, []);
 }
 
 // Bolds a leading "Speaker Name: " attribution so it stands out from the rest of the line.
@@ -2268,7 +2280,7 @@ saveBlob(blob, "transcript.json");
         content={
           <div>
             <p className='mt-3 mb-3 text-sm text-slate-600 dark:text-slate-300'>
-              Speaker detection performs best for small-to-medium group discussions with clear audio. To improve accuracy, manually set the expected number of participants.
+              Speaker detection performs best for small-to-medium group discussions with clear audio. To <strong>improve accuracy,</strong> manually set the expected number of participants.
             </p>
             <button
               type='button'
