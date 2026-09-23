@@ -459,12 +459,14 @@ interface TranscriptSegmentProps {
   onContainerMount: (element: HTMLDivElement | null, index: number) => void;
   onTimestampHover?: (element: HTMLElement | null) => void;
   highlightRanges?: { start: number; end: number; isActive: boolean }[];
+  isSpeakerDiarizationBusy: boolean;
   onAddSpeaker?: () => Speaker;
   onRequestSpeakerRename?: (speaker: Speaker) => void;
 }
 
 function RenameSpeakerButton(props: {
   speakerLabel: string;
+  disabled: boolean;
   onClick: () => void;
 }) {
   const [isTooltipOpen, setIsTooltipOpen] = useState(false);
@@ -499,7 +501,8 @@ function RenameSpeakerButton(props: {
         ref={refs.setReference}
         type='button'
         aria-label={`Rename ${props.speakerLabel}`}
-        className="relative shrink-0 rounded p-1.5 text-slate-500 after:absolute after:left-1/2 after:top-1/2 after:h-11 after:w-11 after:-translate-x-1/2 after:-translate-y-1/2 after:content-[''] hover:bg-slate-200 hover:text-slate-800 focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 dark:text-slate-300 dark:hover:bg-slate-700 dark:hover:text-white"
+        disabled={props.disabled}
+        className="relative shrink-0 rounded p-1.5 text-slate-500 after:absolute after:left-1/2 after:top-1/2 after:h-11 after:w-11 after:-translate-x-1/2 after:-translate-y-1/2 after:content-[''] hover:bg-slate-200 hover:text-slate-800 focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 disabled:cursor-not-allowed disabled:opacity-50 dark:text-slate-300 dark:hover:bg-slate-700 dark:hover:text-white"
         onClick={props.onClick}
         {...getReferenceProps()}
       >
@@ -550,6 +553,7 @@ const TranscriptSegment = memo(function TranscriptSegment({
   onContainerMount,
   onTimestampHover,
   highlightRanges,
+  isSpeakerDiarizationBusy,
   onAddSpeaker,
   onRequestSpeakerRename,
 }: TranscriptSegmentProps) {
@@ -637,6 +641,7 @@ const TranscriptSegment = memo(function TranscriptSegment({
                   id={`speaker-${chunk.id ?? index}`}
                   value={selectedSpeakerId}
                   onChange={(event) => {
+                    if (isSpeakerDiarizationBusy) return;
                     if (event.target.value === "__add") {
                       const speaker = onAddSpeaker?.();
                       if (speaker) {
@@ -654,6 +659,7 @@ const TranscriptSegment = memo(function TranscriptSegment({
                       speakerSource: "manual",
                     });
                   }}
+                  disabled={isSpeakerDiarizationBusy}
                   className='w-auto max-w-full flex-none rounded-md border border-dashed border-blue-300 bg-blue-50/60 py-1 ps-2 pe-7 text-sm text-slate-800 [field-sizing:content] focus:border-solid focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 dark:border-blue-400/50 dark:bg-blue-950/30 dark:text-slate-100'
                 >
                   <option value=''>
@@ -667,7 +673,9 @@ const TranscriptSegment = memo(function TranscriptSegment({
                 {selectedSpeakerId && (
                   <RenameSpeakerButton
                     speakerLabel={speakerLabel}
+                    disabled={isSpeakerDiarizationBusy}
                     onClick={() => {
+                      if (isSpeakerDiarizationBusy) return;
                       const speaker = assignedSpeakers[0];
                       if (speaker) onRequestSpeakerRename?.(speaker);
                     }}
@@ -1152,31 +1160,37 @@ const Transcript = memo(function Transcript({
     typeof speakerCount === "number";
   const speakerCountValid =
     !customSpeakerCountSelected || customSpeakerCountValid;
+  const hasCompletedDiarization = Boolean(
+    diarization &&
+    !diarization.isBusy &&
+    diarization.progress >= 100 &&
+    !diarization.error,
+  );
   const showIdentifySpeakers = Boolean(
     audioAvailable &&
-    !(
-      diarization &&
-      !diarization.isBusy &&
-      diarization.progress >= 100 &&
-      !diarization.error
-    ),
+    !hasCompletedDiarization,
   );
   const [speakerRename, setSpeakerRename] = useState<
     { id: string; originalName: string; name: string } | undefined
   >(undefined);
   const requestSpeakerRename = useCallback((speaker: Speaker) => {
+    if (diarization?.isBusy) return;
     setSpeakerRename({
       id: speaker.id,
       originalName: speaker.name,
       name: speaker.name,
     });
-  }, []);
+  }, [diarization?.isBusy]);
   const submitSpeakerRename = useCallback(() => {
+    if (diarization?.isBusy) return;
     const name = speakerRename?.name.trim();
     if (!speakerRename || !name) return;
     onRenameSpeaker?.(speakerRename.id, name);
     setSpeakerRename(undefined);
-  }, [onRenameSpeaker, speakerRename]);
+  }, [diarization?.isBusy, onRenameSpeaker, speakerRename]);
+  useEffect(() => {
+    if (diarization?.isBusy) setSpeakerRename(undefined);
+  }, [diarization?.isBusy]);
   const [findQuery, setFindQuery] = useState("");
   const [replaceValue, setReplaceValue] = useState("");
   const [matchCase, setMatchCase] = useState(false);
@@ -1449,15 +1463,29 @@ const Transcript = memo(function Transcript({
     return names?.length ? names.join(" + ") : undefined;
   };
 
-  const exportTXT = () => {
-    const text = chunks
-      .map((chunk) => {
-        const text = extractSentenceText(chunk.text);
-        const speaker = getSpeakerLabel(chunk);
-        return speaker ? `${speaker}: ${text}` : text;
-      })
-      .join("\n")
+  const formatTextWithSpeakerLabels = () => {
+    const lines: { speaker?: string; text: string }[] = [];
+    for (const chunk of chunks) {
+      const text = extractSentenceText(chunk.text);
+      if (!text) continue;
+
+      const speaker = getSpeakerLabel(chunk);
+      const previous = lines[lines.length - 1];
+      if (previous?.speaker === speaker) {
+        previous.text += ` ${text}`;
+      } else {
+        lines.push({ speaker, text });
+      }
+    }
+
+    return lines
+      .map((line) => line.speaker ? `${line.speaker}: ${line.text}` : line.text)
+      .join("\n\n")
       .trim();
+  };
+
+  const exportTXT = () => {
+    const text = formatTextWithSpeakerLabels();
 
     const slug = mediaTitle && slugifyTitle(mediaTitle);
     const blob = new Blob([text], { type: "text/plain" });
@@ -1502,14 +1530,7 @@ saveBlob(blob, "transcript.json");
   }, [copiedState]);
 
   const copyToClipboard = async () => {
-    let text = chunks
-      .map((chunk) => {
-        const text = extractSentenceText(chunk.text);
-        const speaker = getSpeakerLabel(chunk);
-        return speaker ? `${speaker}: ${text}` : text;
-      })
-      .join("\n")
-      .trim();
+    let text = formatTextWithSpeakerLabels();
 
     // Use regex to add double line breaks around any [bracketed] text
     // and absorb surrounding spaces so lines start cleanly
@@ -2030,7 +2051,7 @@ saveBlob(blob, "transcript.json");
                 <TranscriptSegment
                   key={`segment-${chunk.timestamp[0]}-${chunk.timestamp[1]}-${chunk.text}`}
                   chunk={chunk}
-                  speakers={diarization?.speakers}
+                  speakers={hasCompletedDiarization ? diarization?.speakers : undefined}
                   index={i}
                   isActive={i === activeIndex}
                   isEditing={Boolean(isEditing)}
@@ -2048,6 +2069,7 @@ saveBlob(blob, "transcript.json");
                   onContainerMount={handleContainerRef}
                   onTimestampHover={setTooltipTarget}
                   highlightRanges={highlightRangesByChunk.get(i)}
+                  isSpeakerDiarizationBusy={Boolean(diarization?.isBusy)}
                   onAddSpeaker={onAddSpeaker}
                   onRequestSpeakerRename={requestSpeakerRename}
                 />
@@ -2385,7 +2407,7 @@ saveBlob(blob, "transcript.json");
                   submitSpeakerRename();
                 }
               }}
-              className='w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-slate-900 outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-500/30 dark:border-slate-600 mb-2 dark:bg-slate-900 dark:text-slate-100'
+              className='url-input'
             />
           </div>
         }
