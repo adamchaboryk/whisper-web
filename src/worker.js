@@ -833,41 +833,78 @@ const normalizeVector = (values) => {
 const cosineSimilarity = (left, right) =>
   left.reduce((sum, value, index) => sum + value * right[index], 0);
 
-const assignEmbeddingCluster = (embedding, clusters) => {
-  let bestIndex = -1;
-  let bestSimilarity = -Infinity;
-  for (let index = 0; index < clusters.length; index++) {
-    const similarity = cosineSimilarity(embedding, clusters[index].centroid);
-    if (similarity > bestSimilarity) {
-      bestSimilarity = similarity;
-      bestIndex = index;
-    }
-  }
-
-  if (bestIndex === -1 || (bestSimilarity < SPEAKER_SIMILARITY_THRESHOLD && clusters.length < 9)) {
-    clusters.push({ centroid: embedding, count: 1 });
-    return clusters.length;
-  }
-
-  const cluster = clusters[bestIndex];
-  cluster.centroid = normalizeVector(
-    cluster.centroid.map(
-      (value, index) => (value * cluster.count + embedding[index]) / (cluster.count + 1),
-    ),
+const mergeEmbeddingClusters = (left, right, samples) => {
+  const sampleIndexes = [...left.sampleIndexes, ...right.sampleIndexes];
+  const initial = samples[sampleIndexes[0]].embedding.map(() => 0);
+  const centroid = normalizeVector(
+    sampleIndexes.reduce((sum, sampleIndex) =>
+      sum.map((value, index) =>
+        value + samples[sampleIndex].embedding[index],
+      ), initial),
   );
-  cluster.count += 1;
-  return bestIndex + 1;
+  return { centroid, sampleIndexes };
 };
 
-const mapAutoDetectedSpeakers = async (
+const clusterEmbeddings = (samples, expectedClusterCount) => {
+  const clusters = samples.map((sample, index) => ({
+    centroid: sample.embedding,
+    sampleIndexes: [index],
+  }));
+  const targetCount = expectedClusterCount === "auto"
+    ? 1
+    : Math.min(expectedClusterCount, clusters.length);
+
+  while (clusters.length > targetCount) {
+    let bestLeft = -1;
+    let bestRight = -1;
+    let bestSimilarity = -Infinity;
+    for (let left = 0; left < clusters.length; left++) {
+      for (let right = left + 1; right < clusters.length; right++) {
+        const similarity = cosineSimilarity(
+          clusters[left].centroid,
+          clusters[right].centroid,
+        );
+        if (similarity > bestSimilarity) {
+          bestSimilarity = similarity;
+          bestLeft = left;
+          bestRight = right;
+        }
+      }
+    }
+
+    if (
+      bestLeft === -1 ||
+      (expectedClusterCount === "auto" &&
+        bestSimilarity < SPEAKER_SIMILARITY_THRESHOLD)
+    ) {
+      break;
+    }
+
+    const merged = mergeEmbeddingClusters(
+      clusters[bestLeft],
+      clusters[bestRight],
+      samples,
+    );
+    clusters.splice(bestRight, 1);
+    clusters[bestLeft] = merged;
+  }
+
+  const sampleClusterIds = new Map();
+  clusters.forEach((cluster, clusterIndex) => {
+    cluster.sampleIndexes.forEach((sampleIndex) => {
+      sampleClusterIds.set(sampleIndex, clusterIndex + 1);
+    });
+  });
+  return sampleClusterIds;
+};
+
+const collectWindowSpeakerEmbeddings = async (
   audio,
   segments,
-  fallbackMapping,
   embeddingProcessor,
   embeddingModel,
-  clusters,
 ) => {
-  const mapping = [...fallbackMapping];
+  const samples = [];
   const localSpeakerIds = new Set(
     segments.flatMap((segment) => CLASS_SPEAKERS[segment.id] ?? []),
   );
@@ -876,10 +913,12 @@ const mapAutoDetectedSpeakers = async (
     if (!speakerAudio) continue;
     const inputs = await embeddingProcessor(speakerAudio);
     const { last_hidden_state } = await embeddingModel(inputs);
-    const embedding = normalizeVector(last_hidden_state.data);
-    mapping[localSpeakerId - 1] = assignEmbeddingCluster(embedding, clusters);
+    samples.push({
+      localSpeakerId,
+      embedding: normalizeVector(last_hidden_state.data),
+    });
   }
-  return mapping;
+  return samples;
 };
 
 const appendTurn = (turns, turn) => {
@@ -911,15 +950,14 @@ const diarizeAudio = async ({ audio, numSpeakers, operationId }) => {
     operationId,
   });
   const [processor, model] = await getDiarizationPipeline(progressCallback);
-  const embeddingPipeline = numSpeakers === "auto"
-    ? await getSpeakerEmbeddingPipeline(progressCallback)
-    : null;
+  const embeddingPipeline = await getSpeakerEmbeddingPipeline(progressCallback);
   const windowSamples = DIARIZATION_WINDOW_SECONDS * DIARIZATION_SAMPLE_RATE;
   const stepSamples =
     (DIARIZATION_WINDOW_SECONDS - DIARIZATION_OVERLAP_SECONDS) *
     DIARIZATION_SAMPLE_RATE;
-  const turns = [];
-  const speakerClusters = [];
+  const provisionalTurns = [];
+  const windowResults = [];
+  const embeddingSamples = [];
   const totalWindows = Math.max(1, Math.ceil((audio.length - windowSamples) / stepSamples) + 1);
 
   let windowIndex = 0;
@@ -938,26 +976,81 @@ const diarizeAudio = async ({ audio, numSpeakers, operationId }) => {
         : speakerLimit === 2
           ? [1, 2, 2]
           : [1, 2, 3]
-      : choosePermutation(segments, turns, windowStart, speakerLimit);
-    const permutation = embeddingPipeline
-      ? await mapAutoDetectedSpeakers(
-        windowAudio,
-        segments,
-        fallbackPermutation,
-        embeddingPipeline[0],
-        embeddingPipeline[1],
-        speakerClusters,
-      )
-      : fallbackPermutation;
+      : choosePermutation(segments, provisionalTurns, windowStart, speakerLimit);
     const stitchTime = windowIndex === 0
       ? windowStart
       : windowStart + DIARIZATION_OVERLAP_SECONDS / 2;
 
+    const windowEmbeddings = await collectWindowSpeakerEmbeddings(
+      windowAudio,
+      segments,
+      embeddingPipeline[0],
+      embeddingPipeline[1],
+    );
+    windowEmbeddings.forEach((sample) => {
+      embeddingSamples.push({
+        windowIndex,
+        localSpeakerId: sample.localSpeakerId,
+        embedding: sample.embedding,
+      });
+    });
+    windowResults.push({
+      windowIndex,
+      windowStart,
+      segments,
+      stitchTime,
+      fallbackPermutation,
+    });
+
+    while (provisionalTurns.length && provisionalTurns.at(-1).start >= stitchTime) provisionalTurns.pop();
+    if (provisionalTurns.length && provisionalTurns.at(-1).end > stitchTime) {
+      provisionalTurns.at(-1).end = stitchTime;
+    }
+
+    for (const segment of segments) {
+      const start = Math.max(windowStart + segment.start, stitchTime);
+      const end = Math.min(windowStart + segment.end, audio.length / DIARIZATION_SAMPLE_RATE);
+      appendTurn(provisionalTurns, {
+        start,
+        end,
+        speakerIds: remapSpeakerIds(
+          CLASS_SPEAKERS[segment.id] ?? [],
+          fallbackPermutation,
+          speakerLimit,
+        ).map((id) => `speaker-${id}`),
+        confidence: segment.confidence,
+      });
+    }
+
+    windowIndex += 1;
+    self.postMessage({
+      status: "diarization_progress",
+      operationId,
+      progress: (windowIndex / totalWindows) * 100,
+    });
+    if (offset + windowSamples >= audio.length) break;
+  }
+
+  const sampleClusterIds = clusterEmbeddings(
+    embeddingSamples,
+    numSpeakers === "auto" ? "auto" : speakerLimit,
+  );
+  const turns = [];
+  for (const window of windowResults) {
+    const permutation = [...window.fallbackPermutation];
+    embeddingSamples.forEach((sample, sampleIndex) => {
+      if (sample.windowIndex !== window.windowIndex) return;
+      const clusterId = sampleClusterIds.get(sampleIndex);
+      if (clusterId !== undefined) {
+        permutation[sample.localSpeakerId - 1] = clusterId;
+      }
+    });
+
+    const { windowStart, segments, stitchTime } = window;
     while (turns.length && turns.at(-1).start >= stitchTime) turns.pop();
     if (turns.length && turns.at(-1).end > stitchTime) {
       turns.at(-1).end = stitchTime;
     }
-
     for (const segment of segments) {
       const start = Math.max(windowStart + segment.start, stitchTime);
       const end = Math.min(windowStart + segment.end, audio.length / DIARIZATION_SAMPLE_RATE);
@@ -972,14 +1065,6 @@ const diarizeAudio = async ({ audio, numSpeakers, operationId }) => {
         confidence: segment.confidence,
       });
     }
-
-    windowIndex += 1;
-    self.postMessage({
-      status: "diarization_progress",
-      operationId,
-      progress: (windowIndex / totalWindows) * 100,
-    });
-    if (offset + windowSamples >= audio.length) break;
   }
 
   let resultTurns = turns;
