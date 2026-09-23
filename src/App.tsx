@@ -3,12 +3,14 @@ import { ApplicationControls, AudioManager } from "./components/AudioManager";
 import Transcript from "./components/Transcript";
 import { useEncryptedDictionary } from "./hooks/useEncryptedDictionary";
 import {
+  SpeakerCountMode,
   TranscriptChunk,
   TranscriberData,
   useTranscriber,
 } from "./hooks/useTranscriber";
 import { hasWebGpuSupport, isSupportedBrowser } from "./utils/Constants";
 import { WarningIcon } from "./utils/Icons";
+import { extractPlainText } from "./utils/SubtitleUtils";
 
 function App() {
   const transcriber = useTranscriber();
@@ -68,6 +70,7 @@ function App() {
   });
   const [playbackRate, setPlaybackRate] = useState(1);
   const [mediaTitle, setMediaTitle] = useState<string | undefined>(undefined);
+  const [audioBuffer, setAudioBuffer] = useState<AudioBuffer | undefined>();
 
   useEffect(() => {
     window.localStorage.setItem("whisper-web-autoscroll", isAutoScrollEnabled.toString());
@@ -218,6 +221,7 @@ function App() {
           words: leftWords,
         };
         const right: TranscriptChunk = {
+          id: crypto.randomUUID(),
           text: after,
           timestamp: [splitStart, rightEnd],
           words: rightWords,
@@ -267,15 +271,38 @@ function App() {
   }, []);
 
   const handleGenerateSummary = useCallback(() => {
-    const text = savedChunks
-      ?.map((chunk) => chunk.text)
-      .join(" ")
+    const lines: { speaker?: string; text: string }[] = [];
+    for (const chunk of savedChunks ?? []) {
+      const speaker = chunk.speakerIds
+        ?.map((speakerId) => transcriber.diarization?.speakers.find(
+          (candidate) => candidate.id === speakerId,
+        )?.name)
+        .filter(Boolean)
+        .join(" + ");
+      const text = extractPlainText(chunk.text).replace(/\s*\n+\s*/g, " ").trim();
+      if (!text) continue;
+      const previous = lines[lines.length - 1];
+      if (previous && previous.speaker === speaker) {
+        previous.text += ` ${text}`;
+      } else {
+        lines.push({ speaker, text });
+      }
+    }
+    const text = lines
+      .map((line) => line.speaker ? `${line.speaker}: ${line.text}` : line.text)
+      .join("\n")
       .trim();
 
     if (text) {
-      transcriber.summarize(text);
+      transcriber.summarize(text, lines.some((line) => line.speaker));
     }
   }, [savedChunks, transcriber]);
+
+  const handleIdentifySpeakers = useCallback((speakerCount: SpeakerCountMode) => {
+    if (audioBuffer && transcriber.output && !transcriber.output.isBusy) {
+      transcriber.identifySpeakers(audioBuffer, speakerCount, savedChunks);
+    }
+  }, [audioBuffer, savedChunks, transcriber]);
 
   const isEditingDraft = Boolean(draftChunks);
 
@@ -329,6 +356,7 @@ function App() {
             isEditing={Boolean(draftChunks)}
             onChunksReplace={handleChunksReplace}
             onMediaTitleChange={setMediaTitle}
+            onAudioBufferChange={setAudioBuffer}
           />
           <Transcript
             transcribedData={transcriber.output}
@@ -351,6 +379,11 @@ function App() {
             summary={transcriber.summary}
             onGenerateSummary={handleGenerateSummary}
             supportsSummarizer={transcriber.supportsSummarizer}
+            diarization={transcriber.diarization}
+            audioAvailable={Boolean(audioBuffer)}
+            onIdentifySpeakers={handleIdentifySpeakers}
+            onAddSpeaker={transcriber.addSpeaker}
+            onRenameSpeaker={transcriber.renameSpeaker}
             subscribeToTimeUpdate={subscribeToTimeUpdate}
             isAutoScrollSettingEnabled={isAutoScrollEnabled}
             setIsAutoScrollSettingEnabled={setIsAutoScrollEnabled}

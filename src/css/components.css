@@ -160,6 +160,7 @@
   font-size: 0.75rem;
 }
 
+.summary-settings-section,
 .dictionary-section {
   margin-top: 0.75rem;
   border-top: 1px solid #e2e8f0;
@@ -1051,4 +1052,8 @@ mark.find-match-active {
 .dark mark.find-match-active {
   background-color: #c2410c;
   color: #fff7ed;
+}
+
+.loading-spinner {
+  margin-bottom: 0.3rem;
 }

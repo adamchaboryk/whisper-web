@@ -322,6 +322,7 @@ export const AudioManager = React.memo(function AudioManager(props: {
   isEditing?: boolean;
   onChunksReplace?: (chunks: TranscriberData["chunks"]) => void;
   onMediaTitleChange?: (title: string | undefined) => void;
+  onAudioBufferChange?: (audio: AudioBuffer | undefined) => void;
 }) {
   const [isAudioProcessing, setIsAudioProcessing] = useState(false);
   const [audioProcessingProgress, setAudioProcessingProgress] =
@@ -364,6 +365,11 @@ export const AudioManager = React.memo(function AudioManager(props: {
         : undefined,
     );
   }, [audioData, onMediaTitleChange]);
+
+  const { onAudioBufferChange } = props;
+  useEffect(() => {
+    onAudioBufferChange?.(audioData?.buffer);
+  }, [audioData, onAudioBufferChange]);
 
   const [showWarningModal, setShowWarningModal] = useState(false);
   const [isHoveringFile, setIsHoveringFile] = useState(false);

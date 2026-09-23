@@ -1,4 +1,11 @@
-import { pipeline, WhisperTextStreamer } from "@huggingface/transformers";
+import {
+  AutoFeatureExtractor,
+  AutoModel,
+  AutoModelForAudioFrameClassification,
+  AutoProcessor,
+  pipeline,
+  WhisperTextStreamer,
+} from "@huggingface/transformers";
 import { createTranscriber, DEFAULT_MODEL_URLS } from "parakeet.wgsl";
 
 // Cryptographically pinned SHA-256 manifest endpoints for Parakeet TDT 0.6B V2
@@ -642,8 +649,378 @@ class PipelineFactory {
   }
 }
 
+const DIARIZATION_MODEL = "onnx-community/pyannote-segmentation-3.0";
+const DIARIZATION_REVISION = "733a93b6473d019a773298e08cefa686894b1854";
+const SPEAKER_EMBEDDING_MODEL = "onnx-community/wespeaker-voxceleb-resnet34-LM";
+const SPEAKER_EMBEDDING_REVISION = "6a61a1833ff2583aabeba044f5c8221f00b67ceb";
+const DIARIZATION_SAMPLE_RATE = 16000;
+const DIARIZATION_WINDOW_SECONDS = 10;
+const DIARIZATION_OVERLAP_SECONDS = 2;
+const MIN_EMBEDDING_SECONDS = 0.75;
+const MAX_EMBEDDING_SECONDS = 5;
+const SPEAKER_SIMILARITY_THRESHOLD = 0.3;
+
+let diarizationProcessor = null;
+let diarizationModel = null;
+let speakerEmbeddingProcessor = null;
+let speakerEmbeddingModel = null;
+
+const getDiarizationPipeline = async (progressCallback) => {
+  diarizationProcessor ??= AutoProcessor.from_pretrained(
+    DIARIZATION_MODEL,
+    {
+      revision: DIARIZATION_REVISION,
+      progress_callback: progressCallback,
+    },
+  );
+  diarizationModel ??= AutoModelForAudioFrameClassification.from_pretrained(
+    DIARIZATION_MODEL,
+    {
+      revision: DIARIZATION_REVISION,
+      device: "wasm",
+      dtype: "fp32",
+      progress_callback: progressCallback,
+    },
+  );
+  return Promise.all([diarizationProcessor, diarizationModel]);
+};
+
+const getSpeakerEmbeddingPipeline = async (progressCallback) => {
+  speakerEmbeddingProcessor ??= AutoFeatureExtractor.from_pretrained(
+    SPEAKER_EMBEDDING_MODEL,
+    {
+      revision: SPEAKER_EMBEDDING_REVISION,
+      progress_callback: progressCallback,
+    },
+  );
+  speakerEmbeddingModel ??= AutoModel.from_pretrained(
+    SPEAKER_EMBEDDING_MODEL,
+    {
+      revision: SPEAKER_EMBEDDING_REVISION,
+      device: "wasm",
+      dtype: "q8",
+      progress_callback: progressCallback,
+    },
+  );
+  return Promise.all([speakerEmbeddingProcessor, speakerEmbeddingModel]);
+};
+
+const CLASS_SPEAKERS = [[], [1], [2], [3], [1, 2], [1, 3], [2, 3]];
+
+const remapSpeakerIds = (ids, permutation, speakerCount) => {
+  const mapped = ids.map((id) => permutation[id - 1] ?? 1);
+  return [...new Set(mapped.map((id) => Math.min(id, speakerCount)))].sort();
+};
+
+const speakerIdsAt = (turns, time) =>
+  (turns.find((turn) => turn.start <= time && turn.end > time)?.speakerIds ?? [])
+    .map((id) => Number(id.replace("speaker-", "")));
+
+const createSpeakerMappings = (speakerCount) => {
+  if (speakerCount === 1) return [[1, 1, 1]];
+  if (speakerCount === 2) {
+    return [
+      [1, 1, 2],
+      [1, 2, 1],
+      [1, 2, 2],
+      [2, 1, 1],
+      [2, 1, 2],
+      [2, 2, 1],
+    ];
+  }
+
+  const mappings = [];
+  for (let first = 1; first <= speakerCount; first++) {
+    for (let second = 1; second <= speakerCount; second++) {
+      if (second === first) continue;
+      for (let third = 1; third <= speakerCount; third++) {
+        if (third === first || third === second) continue;
+        mappings.push([first, second, third]);
+      }
+    }
+  }
+  return mappings;
+};
+
+const choosePermutation = (segments, existingTurns, windowStart, speakerCount) => {
+  const permutations = createSpeakerMappings(speakerCount);
+  const usedSpeakerIds = new Set(
+    existingTurns.flatMap((turn) => turn.speakerIds)
+      .map((id) => Number(id.replace("speaker-", ""))),
+  );
+  const overlapLocalIds = new Set(
+    segments
+      .filter((segment) => segment.start < DIARIZATION_OVERLAP_SECONDS)
+      .flatMap((segment) => CLASS_SPEAKERS[segment.id] ?? []),
+  );
+  const activeLocalIds = new Set(
+    segments.flatMap((segment) => CLASS_SPEAKERS[segment.id] ?? []),
+  );
+  const overlapFrames = [];
+  for (let offset = 0; offset < DIARIZATION_OVERLAP_SECONDS; offset += 0.1) {
+    const segment = segments.find(
+      (candidate) => candidate.start <= offset && candidate.end > offset,
+    );
+    overlapFrames.push({
+      expected: speakerIdsAt(existingTurns, windowStart + offset),
+      localIds: CLASS_SPEAKERS[segment?.id] ?? [],
+    });
+  }
+
+  let best = permutations[0];
+  let bestScore = -Infinity;
+  for (const permutation of permutations) {
+    let score = 0;
+    for (const frame of overlapFrames) {
+      const expected = frame.expected;
+      const actual = remapSpeakerIds(
+        frame.localIds,
+        permutation,
+        speakerCount,
+      );
+      const expectedKey = expected.join(",");
+      const actualKey = actual.join(",");
+      score += expectedKey === actualKey ? 2 : expected.some((id) => actual.includes(id)) ? 1 : -1;
+    }
+    for (const localId of activeLocalIds) {
+      if (!overlapLocalIds.has(localId) && !usedSpeakerIds.has(permutation[localId - 1])) {
+        score += 0.25;
+      }
+    }
+    if (score > bestScore) {
+      bestScore = score;
+      best = permutation;
+    }
+  }
+  return best;
+};
+
+const collectExclusiveSpeakerAudio = (audio, segments, localSpeakerId) => {
+  const chunks = [];
+  let totalSamples = 0;
+  const maxSamples = MAX_EMBEDDING_SECONDS * DIARIZATION_SAMPLE_RATE;
+  for (const segment of segments) {
+    const localIds = CLASS_SPEAKERS[segment.id] ?? [];
+    if (localIds.length !== 1 || localIds[0] !== localSpeakerId) continue;
+    const start = Math.max(0, Math.floor(segment.start * DIARIZATION_SAMPLE_RATE));
+    const end = Math.min(
+      audio.length,
+      Math.ceil(segment.end * DIARIZATION_SAMPLE_RATE),
+      start + maxSamples - totalSamples,
+    );
+    if (end > start) {
+      chunks.push(audio.subarray(start, end));
+      totalSamples += end - start;
+    }
+    if (totalSamples >= maxSamples) break;
+  }
+  if (totalSamples < MIN_EMBEDDING_SECONDS * DIARIZATION_SAMPLE_RATE) return null;
+  const result = new Float32Array(totalSamples);
+  let offset = 0;
+  for (const chunk of chunks) {
+    result.set(chunk, offset);
+    offset += chunk.length;
+  }
+  return result;
+};
+
+const normalizeVector = (values) => {
+  const vector = Array.from(values);
+  const norm = Math.hypot(...vector) || 1;
+  return vector.map((value) => value / norm);
+};
+
+const cosineSimilarity = (left, right) =>
+  left.reduce((sum, value, index) => sum + value * right[index], 0);
+
+const assignEmbeddingCluster = (embedding, clusters) => {
+  let bestIndex = -1;
+  let bestSimilarity = -Infinity;
+  for (let index = 0; index < clusters.length; index++) {
+    const similarity = cosineSimilarity(embedding, clusters[index].centroid);
+    if (similarity > bestSimilarity) {
+      bestSimilarity = similarity;
+      bestIndex = index;
+    }
+  }
+
+  if (bestIndex === -1 || (bestSimilarity < SPEAKER_SIMILARITY_THRESHOLD && clusters.length < 9)) {
+    clusters.push({ centroid: embedding, count: 1 });
+    return clusters.length;
+  }
+
+  const cluster = clusters[bestIndex];
+  cluster.centroid = normalizeVector(
+    cluster.centroid.map(
+      (value, index) => (value * cluster.count + embedding[index]) / (cluster.count + 1),
+    ),
+  );
+  cluster.count += 1;
+  return bestIndex + 1;
+};
+
+const mapAutoDetectedSpeakers = async (
+  audio,
+  segments,
+  fallbackMapping,
+  embeddingProcessor,
+  embeddingModel,
+  clusters,
+) => {
+  const mapping = [...fallbackMapping];
+  const localSpeakerIds = new Set(
+    segments.flatMap((segment) => CLASS_SPEAKERS[segment.id] ?? []),
+  );
+  for (const localSpeakerId of localSpeakerIds) {
+    const speakerAudio = collectExclusiveSpeakerAudio(audio, segments, localSpeakerId);
+    if (!speakerAudio) continue;
+    const inputs = await embeddingProcessor(speakerAudio);
+    const { last_hidden_state } = await embeddingModel(inputs);
+    const embedding = normalizeVector(last_hidden_state.data);
+    mapping[localSpeakerId - 1] = assignEmbeddingCluster(embedding, clusters);
+  }
+  return mapping;
+};
+
+const appendTurn = (turns, turn) => {
+  if (turn.speakerIds.length === 0 || turn.end - turn.start < 0.05) return;
+  const previous = turns.at(-1);
+  if (
+    previous &&
+    previous.speakerIds.join(",") === turn.speakerIds.join(",") &&
+    turn.start - previous.end < 0.1
+  ) {
+    const previousDuration = previous.end - previous.start;
+    const turnDuration = turn.end - turn.start;
+    previous.confidence =
+      (previous.confidence * previousDuration + turn.confidence * turnDuration) /
+      (previousDuration + turnDuration);
+    previous.end = turn.end;
+    return;
+  }
+  turns.push(turn);
+};
+
+const diarizeAudio = async ({ audio, numSpeakers, operationId }) => {
+  const speakerLimit = numSpeakers === "auto"
+    ? 9
+    : Math.max(1, Math.min(9, numSpeakers));
+  const progressCallback = (progress) => self.postMessage({
+    ...progress,
+    scope: "diarization",
+    operationId,
+  });
+  const [processor, model] = await getDiarizationPipeline(progressCallback);
+  const embeddingPipeline = numSpeakers === "auto"
+    ? await getSpeakerEmbeddingPipeline(progressCallback)
+    : null;
+  const windowSamples = DIARIZATION_WINDOW_SECONDS * DIARIZATION_SAMPLE_RATE;
+  const stepSamples =
+    (DIARIZATION_WINDOW_SECONDS - DIARIZATION_OVERLAP_SECONDS) *
+    DIARIZATION_SAMPLE_RATE;
+  const turns = [];
+  const speakerClusters = [];
+  const totalWindows = Math.max(1, Math.ceil((audio.length - windowSamples) / stepSamples) + 1);
+
+  let windowIndex = 0;
+  for (let offset = 0; offset < audio.length; offset += stepSamples) {
+    const windowAudio = audio.slice(offset, offset + windowSamples);
+    const inputs = await processor(windowAudio);
+    const { logits } = await model(inputs);
+    const segments = processor.post_process_speaker_diarization(
+      logits,
+      windowAudio.length,
+    )[0];
+    const windowStart = offset / DIARIZATION_SAMPLE_RATE;
+    const fallbackPermutation = windowIndex === 0
+      ? speakerLimit === 1
+        ? [1, 1, 1]
+        : speakerLimit === 2
+          ? [1, 2, 2]
+          : [1, 2, 3]
+      : choosePermutation(segments, turns, windowStart, speakerLimit);
+    const permutation = embeddingPipeline
+      ? await mapAutoDetectedSpeakers(
+        windowAudio,
+        segments,
+        fallbackPermutation,
+        embeddingPipeline[0],
+        embeddingPipeline[1],
+        speakerClusters,
+      )
+      : fallbackPermutation;
+    const stitchTime = windowIndex === 0
+      ? windowStart
+      : windowStart + DIARIZATION_OVERLAP_SECONDS / 2;
+
+    while (turns.length && turns.at(-1).start >= stitchTime) turns.pop();
+    if (turns.length && turns.at(-1).end > stitchTime) {
+      turns.at(-1).end = stitchTime;
+    }
+
+    for (const segment of segments) {
+      const start = Math.max(windowStart + segment.start, stitchTime);
+      const end = Math.min(windowStart + segment.end, audio.length / DIARIZATION_SAMPLE_RATE);
+      appendTurn(turns, {
+        start,
+        end,
+        speakerIds: remapSpeakerIds(
+          CLASS_SPEAKERS[segment.id] ?? [],
+          permutation,
+          speakerLimit,
+        ).map((id) => `speaker-${id}`),
+        confidence: segment.confidence,
+      });
+    }
+
+    windowIndex += 1;
+    self.postMessage({
+      status: "diarization_progress",
+      operationId,
+      progress: (windowIndex / totalWindows) * 100,
+    });
+    if (offset + windowSamples >= audio.length) break;
+  }
+
+  let resultTurns = turns;
+  if (numSpeakers === "auto") {
+    const detectedIds = [];
+    for (const turn of turns) {
+      for (const speakerId of turn.speakerIds) {
+        if (!detectedIds.includes(speakerId)) detectedIds.push(speakerId);
+      }
+    }
+    const normalizedIds = new Map(
+      detectedIds.map((speakerId, index) => [speakerId, `speaker-${index + 1}`]),
+    );
+    resultTurns = turns.map((turn) => ({
+      ...turn,
+      speakerIds: turn.speakerIds.map((speakerId) => normalizedIds.get(speakerId)),
+    }));
+  }
+
+  self.postMessage({
+    status: "diarization_complete",
+    operationId,
+    turns: resultTurns,
+  });
+};
+
 self.addEventListener("message", async (event) => {
   const message = event.data;
+
+  if (message.type === "diarize") {
+    try {
+      await diarizeAudio(message);
+    } catch (error) {
+      self.postMessage({
+        status: "diarization_error",
+        operationId: message.operationId,
+        message: error?.message ?? String(error),
+      });
+    }
+    return;
+  }
 
   if (message.type === "replace_dictionary") {
     const escapeRegExp = (value) => value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");

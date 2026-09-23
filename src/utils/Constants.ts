@@ -239,4 +239,5 @@ export default {
   DEFAULT_QUANTIZED: isMobileOrTablet,
   DEFAULT_DTYPE: "q4",
   DEFAULT_GPU: hasWebGpuSupport,
+  DEFAULT_SUMMARY_TYPE: "tldr" as const,
 };

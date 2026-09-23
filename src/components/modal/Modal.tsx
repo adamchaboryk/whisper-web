@@ -6,6 +6,7 @@ export interface Props {
   onClose: () => void;
   onSubmit?: () => void;
   submitText?: string;
+  cancelText?: string;
   submitEnabled?: boolean;
   title: string | JSX.Element;
   content: string | JSX.Element;
@@ -76,6 +77,7 @@ export default function Modal({
   title,
   content,
   submitText,
+  cancelText,
   submitEnabled = true,
   cacheSize = 0,
 }: Props) {
@@ -140,6 +142,15 @@ export default function Modal({
                       onClick={onSubmit}
                     >
                       {submitText}
+                    </button>
+                  )}
+                  {cancelText && (
+                    <button
+                      type='button'
+                      className='inline-flex justify-center rounded-md border border-slate-300 px-4 py-2 text-sm font-semibold text-slate-700 hover:bg-slate-100 focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 dark:border-slate-600 dark:text-slate-200 dark:hover:bg-slate-700'
+                      onClick={onClose}
+                    >
+                      {cancelText}
                     </button>
                   )}
                 </div>

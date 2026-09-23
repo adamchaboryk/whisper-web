@@ -436,6 +436,29 @@ export default function SettingsModal(props: SettingsModalProps) {
               </select>
             </>
           )}
+          {props.transcriber.supportsSummarizer && (
+            <section className='summary-settings-section'>
+              <label htmlFor='summary-type-select' className='form-label'>
+                Summary style
+              </label>
+              <span className='text-gray-600 dark:text-slate-400 block'>
+                Choose how transcript summaries are structured.
+              </span>
+              <select
+                id='summary-type-select'
+                className='form-select mt-3 mb-5'
+                value={props.transcriber.summaryType}
+                onChange={(e) => {
+                  props.transcriber.setSummaryType(
+                    e.target.value === "key-points" ? "key-points" : "tldr",
+                  );
+                }}
+              >
+                <option value='tldr'>General summary</option>
+                <option value='key-points'>Key points</option>
+              </select>
+            </section>
+          )}
           <section className='dictionary-section'>
             <h3 className='dictionary-title'>
               Text Replacement Dictionary
