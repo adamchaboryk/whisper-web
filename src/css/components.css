@@ -662,6 +662,142 @@
   color: var(--text-muted);
 }
 
+.identify-speakers-dialog__description {
+  margin: 0.75rem 0;
+  font-size: 1rem;
+}
+
+.identify-speakers-option {
+  display: flex;
+  width: 100%;
+  align-items: center;
+  gap: 0.5rem;
+  margin-bottom: 0.5rem;
+  border: 1px solid #cbd5e1;
+  border-radius: 0.375rem;
+  padding: 0.5rem 1rem;
+  background: transparent;
+  color: #334155;
+  text-align: left;
+  font-size: 1rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.identify-speakers-option:hover {
+  background: #f1f5f9;
+}
+
+.identify-speakers-option:focus-visible,
+.identify-speakers-option--custom:focus-within {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}
+
+.identify-speakers-option--selected {
+  border-color: #2563eb;
+  border-left-width: 4px;
+  background: #eff6ff;
+  color: #1e293b;
+  border-width: 2px;
+}
+
+.identify-speakers-option--custom {
+  position: relative;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: start;
+  column-gap: 0.75rem;
+  row-gap: 0.25rem;
+  margin-top: 0.5rem;
+  margin-bottom: 0;
+  padding: 0.75rem;
+  cursor: default;
+}
+
+.identify-speakers-option__content {
+  min-width: 0;
+}
+
+.identify-speakers-option__label {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  cursor: pointer;
+}
+
+.identify-speakers-option__label::before {
+  position: absolute;
+  inset: 0;
+  content: "";
+  cursor: pointer;
+}
+
+.identify-speakers-option__check {
+  flex-shrink: 0;
+  width: 1.25rem;
+  height: 1.25rem;
+  color: #1d4ed8;
+}
+
+.identify-speakers-option__help {
+  margin: 0.25rem 0 0;
+  color: #64748b;
+  font-size: 0.75rem;
+  font-weight: 400;
+}
+
+.identify-speakers-option__input-container {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+}
+
+.identify-speakers-option__input {
+  width: 5rem;
+  border: 1px solid #64748b;
+  border-radius: 0.375rem;
+  padding: 0.25rem 0.5rem;
+  background: var(--surface);
+  color: var(--text);
+  outline: none;
+}
+
+.identify-speakers-option__input:focus {
+  border-color: #3b82f6;
+}
+
+.dark .identify-speakers-option {
+  border-color: #475569;
+  color: #e2e8f0;
+}
+
+.dark .identify-speakers-option:hover {
+  background: rgb(23 37 84 / 0.7);
+}
+
+.dark .identify-speakers-option--selected {
+  background: rgb(23 37 84 / 0.7);
+  border-color: #2563eb;
+  border-left-width: 4px;
+  color: #f1f5f9;
+}
+
+.dark .identify-speakers-option__check {
+  color: #93c5fd;
+}
+
+.dark .identify-speakers-option__help {
+  color: #94a3b8;
+}
+
+.dark .identify-speakers-option__input {
+  border-color: #64748b;
+  background: #0f172a;
+  color: #f1f5f9;
+}
+
 .modal-actions {
   display: flex;
   flex-direction: row-reverse;

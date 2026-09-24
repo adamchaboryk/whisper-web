@@ -2300,47 +2300,47 @@ saveBlob(blob, "transcript.json");
         cancelText='Cancel'
         submitEnabled={speakerCountValid}
         content={
-          <div>
-            <p className='mt-3 mb-3 text-sm text-slate-600 dark:text-slate-300'>
+          <div className='identify-speakers-dialog'>
+            <p className='identify-speakers-dialog__description'>
               Speaker detection performs best for small-to-medium group discussions with clear audio. To <strong>improve accuracy,</strong> manually set the expected number of participants.
             </p>
             <button
               type='button'
               aria-pressed={speakerCount === "auto"}
               onClick={() => setSpeakerCount("auto")}
-              className={`mb-2 flex w-full items-center gap-2 rounded-md border px-4 py-2 text-left text-sm font-semibold focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 ${speakerCount === "auto"
-                ? "border-blue-600 border-l-4 bg-blue-50 text-slate-800 dark:bg-blue-950/40 dark:text-slate-100"
-                : "border-slate-300 text-slate-700 hover:bg-slate-100 dark:border-slate-600 dark:text-slate-200 dark:hover:bg-slate-700"
+              className={`identify-speakers-option ${speakerCount === "auto"
+                ? "identify-speakers-option--selected"
+                : ""
                 }`}
             >
               <span>Auto-detect</span>
               {speakerCount === "auto" && (
-                <svg className='h-5 w-5 shrink-0 text-blue-700 dark:text-blue-300' viewBox='0 0 20 20' fill='currentColor' aria-hidden='true'>
+                <svg className='identify-speakers-option__check' viewBox='0 0 20 20' fill='currentColor' aria-hidden='true'>
                   <path fillRule='evenodd' d='M16.704 5.29a1 1 0 0 1 .006 1.414l-7.25 7.31a1 1 0 0 1-1.42.006L3.29 9.362a1 1 0 1 1 1.42-1.408l4.04 4.073 6.54-6.598a1 1 0 0 1 1.414-.138Z' clipRule='evenodd' />
                 </svg>
               )}
             </button>
-            <div className={`mt-2 grid grid-cols-[minmax(0,1fr)_auto] items-start gap-x-3 gap-y-1 rounded-md border p-3 focus-within:ring-2 focus-within:ring-blue-500 ${customSpeakerCountSelected
-              ? "border-blue-600 border-l-4 bg-blue-50 dark:bg-blue-950/40"
-              : "border-slate-300 dark:border-slate-600"
+            <div className={`identify-speakers-option identify-speakers-option--custom ${customSpeakerCountSelected
+              ? "identify-speakers-option--selected"
+              : ""
               }`}>
-              <div className='min-w-0'>
+              <div className='identify-speakers-option__content'>
                 <label
                   htmlFor='speaker-count-input'
-                  className='flex items-center gap-2 text-sm font-semibold text-slate-700 dark:text-slate-200'
+                  className='identify-speakers-option__label'
                 >
                   Number of speakers
                   {customSpeakerCountSelected && (
-                    <svg className='h-5 w-5 shrink-0 text-blue-700 dark:text-blue-300' viewBox='0 0 20 20' fill='currentColor' aria-hidden='true'>
+                    <svg className='identify-speakers-option__check' viewBox='0 0 20 20' fill='currentColor' aria-hidden='true'>
                       <path fillRule='evenodd' d='M16.704 5.29a1 1 0 0 1 .006 1.414l-7.25 7.31a1 1 0 0 1-1.42.006L3.29 9.362a1 1 0 1 1 1.42-1.408l4.04 4.073 6.54-6.598a1 1 0 0 1 1.414-.138Z' clipRule='evenodd' />
                     </svg>
                   )}
                 </label>
-                <p id='custom-speaker-count-help' className='mt-1 text-xs text-slate-500 dark:text-slate-400'>
+                <p id='custom-speaker-count-help' className='identify-speakers-option__help'>
                   Enter a number between 2 and 9.
                 </p>
               </div>
-              <div className='flex items-center gap-2'>
+              <div className='identify-speakers-option__input-container'>
                 <input
                   id='speaker-count-input'
                   type='number'
@@ -2364,7 +2364,7 @@ saveBlob(blob, "transcript.json");
                       setSpeakerCount(parsed as SpeakerCountMode);
                     }
                   }}
-                  className='w-20 rounded-md border border-slate-500 bg-white px-2 py-1 text-slate-900 outline-none focus:border-blue-500 dark:border-slate-500 dark:bg-slate-900 dark:text-slate-100'
+                  className='identify-speakers-option__input'
                 />
               </div>
             </div>
